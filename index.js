@@ -38,6 +38,7 @@ const SCAN_INTERVAL_MS = 60 * 1000;
 const UPDATE_INTERVAL_MS = 5 * 60 * 1000;
 
 const COOLDOWN_HOURS = 24;
+const UPDATE_BUCKET_PERCENT = 10;
 
 let scannerRunning = false;
 let scanIndex = 0;
@@ -139,6 +140,29 @@ function generateCode() {
   return code;
 }
 
+function isUsMarketTimeSaudi() {
+  const now = new Date();
+
+  const saTime = new Date(
+    now.toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })
+  );
+
+  const day = saTime.getDay();
+  const hour = saTime.getHours();
+  const minute = saTime.getMinutes();
+
+  // الأحد 0 - السبت 6
+  if (day === 0 || day === 6) return false;
+
+  const totalMinutes = hour * 60 + minute;
+
+  // فترة مرنة تغطي الصيف والشتاء بتوقيت السعودية
+  const open = 16 * 60 + 30;   // 4:30 م
+  const close = 24 * 60;       // 12:00 ليل
+
+  return totalMinutes >= open && totalMinutes <= close;
+}
+
 function getType(item) {
   return String(item?.details?.contract_type || '').toUpperCase();
 }
@@ -215,7 +239,6 @@ function distancePercent(strike, price) {
 function isContractPriceOk(price) {
   return price >= 1.50 && price <= 2.20;
 }
-
 // =====================
 // Massive API
 // =====================
@@ -509,7 +532,6 @@ async function closeTrade(id, reason, currentPrice) {
 
   if (error) throw error;
 }
-
 // =====================
 // Flow Logic
 // =====================
@@ -652,14 +674,16 @@ function buildLevels(side, stock) {
     return {
       stop: Number((stock.recentLow - buffer).toFixed(2)),
       target1: Number((stock.recentHigh + buffer).toFixed(2)),
-      target2: Number((stock.recentHigh + buffer * 2).toFixed(2))
+      target2: Number((stock.recentHigh + buffer * 2).toFixed(2)),
+      target3: Number((stock.recentHigh + buffer * 3).toFixed(2))
     };
   }
 
   return {
     stop: Number((stock.recentHigh + buffer).toFixed(2)),
     target1: Number((stock.recentLow - buffer).toFixed(2)),
-    target2: Number((stock.recentLow - buffer * 2).toFixed(2))
+    target2: Number((stock.recentLow - buffer * 2).toFixed(2)),
+    target3: Number((stock.recentLow - buffer * 3).toFixed(2))
   };
 }
 
@@ -708,6 +732,7 @@ function buildEntryMessage(symbol, stock, best, levels) {
 🛑 وقف السهم: ${fmtPrice(levels.stop)}
 🎯 الهدف الأول: ${fmtPrice(levels.target1)}
 🎯 الهدف الثاني: ${fmtPrice(levels.target2)}
+🎯 الهدف الثالث: ${fmtPrice(levels.target3)}
 
 ━━━━━━━━━━━━━━
 🔥 سبب الالتقاط:
@@ -724,12 +749,7 @@ function buildEntryMessage(symbol, stock, best, levels) {
 هذه قراءة سيولة آلية وليست توصية شراء أو بيع.`;
 }
 
-function buildUpdateMessage(trade, currentContractPrice, stockPrice) {
-  const pnl =
-    trade.entry_contract_price
-      ? ((currentContractPrice - trade.entry_contract_price) / trade.entry_contract_price) * 100
-      : 0;
-
+function buildUpdateMessage(trade, currentContractPrice, stockPrice, pnl) {
   return `🔄 تحديث الصفقة
 
 📊 السهم: ${trade.symbol}
@@ -737,11 +757,14 @@ function buildUpdateMessage(trade, currentContractPrice, stockPrice) {
 
 💰 الدخول: ${fmtPrice(trade.entry_contract_price)}
 💰 الحالي: ${fmtPrice(currentContractPrice)}
+
 📈 النتيجة الحالية: ${fmtPercent(pnl)}
 
 📍 سعر السهم الحالي: ${fmtPrice(stockPrice)}
 🛑 وقف السهم: ${fmtPrice(trade.stock_stop_price)}
-🎯 الهدف الأول: ${fmtPrice(trade.stock_target_1)}`;
+🎯 الهدف الأول: ${fmtPrice(trade.stock_target_1)}
+🎯 الهدف الثاني: ${fmtPrice(trade.stock_target_2)}
+🎯 الهدف الثالث: ${fmtPrice(trade.stock_target_3)}`;
 }
 
 // =====================
@@ -775,9 +798,14 @@ async function scanSymbol(symbol) {
     stock_stop_price: levels.stop,
     stock_target_1: levels.target1,
     stock_target_2: levels.target2,
+    stock_target_3: levels.target3,
     flow_score: best.score,
     status: 'OPEN',
-    opened_at: nowIso()
+    opened_at: nowIso(),
+    last_update_bucket: 0,
+    tp1_hit: false,
+    tp2_hit: false,
+    tp3_hit: false
   };
 
   await saveTrade(trade);
@@ -811,7 +839,6 @@ async function scanNextSymbol() {
     scannerRunning = false;
   }
 }
-
 // =====================
 // Trade Updates
 // =====================
@@ -843,33 +870,50 @@ async function updateOpenTrades() {
 
       if (!contractPrice) continue;
 
+      const entryPrice = Number(trade.entry_contract_price);
+
+      const pnl = entryPrice
+        ? ((contractPrice - entryPrice) / entryPrice) * 100
+        : 0;
+
+      const currentBucket = Math.trunc(pnl / UPDATE_BUCKET_PERCENT);
+      const lastBucket = Number(trade.last_update_bucket || 0);
+
       let hitStop = false;
-      let hitTarget = false;
+      let hitTp1 = false;
+      let hitTp2 = false;
+      let hitTp3 = false;
 
       if (trade.side === 'CALL') {
         hitStop = stock.price <= Number(trade.stock_stop_price);
-        hitTarget = stock.price >= Number(trade.stock_target_1);
+        hitTp1 = stock.price >= Number(trade.stock_target_1);
+        hitTp2 = stock.price >= Number(trade.stock_target_2);
+        hitTp3 = stock.price >= Number(trade.stock_target_3);
       }
 
       if (trade.side === 'PUT') {
         hitStop = stock.price >= Number(trade.stock_stop_price);
-        hitTarget = stock.price <= Number(trade.stock_target_1);
+        hitTp1 = stock.price <= Number(trade.stock_target_1);
+        hitTp2 = stock.price <= Number(trade.stock_target_2);
+        hitTp3 = stock.price <= Number(trade.stock_target_3);
       }
 
-      if (hitTarget) {
-        await closeTrade(trade.id, 'TP1', contractPrice);
-        await setCooldown(trade.symbol, 'تم تحقيق الهدف');
+      if (hitTp3) {
+        await closeTrade(trade.id, 'TP3', contractPrice);
+        await setCooldown(trade.symbol, 'تم تحقيق الهدف الثالث');
 
         await sendToActiveUsers(
-`✅ تحقق الهدف الأول
+`✅ تم إغلاق الصفقة على الهدف الثالث
 
 📊 السهم: ${trade.symbol}
 📈 النوع: ${sideArabic(trade.side)}
 
-💰 الدخول: ${fmtPrice(trade.entry_contract_price)}
-💰 الحالي: ${fmtPrice(contractPrice)}
+💰 الدخول: ${fmtPrice(entryPrice)}
+💰 الخروج: ${fmtPrice(contractPrice)}
 
-🎯 هدف السهم: ${fmtPrice(trade.stock_target_1)}`
+📈 النتيجة النهائية: ${fmtPercent(pnl)}
+
+🎯 هدف السهم الثالث: ${fmtPrice(trade.stock_target_3)}`
         );
 
         continue;
@@ -880,13 +924,15 @@ async function updateOpenTrades() {
         await setCooldown(trade.symbol, 'تم ضرب الوقف');
 
         await sendToActiveUsers(
-`🛑 تم ضرب الوقف
+`🛑 تم إغلاق الصفقة على وقف الخسارة
 
 📊 السهم: ${trade.symbol}
 📈 النوع: ${sideArabic(trade.side)}
 
-💰 الدخول: ${fmtPrice(trade.entry_contract_price)}
-💰 الحالي: ${fmtPrice(contractPrice)}
+💰 الدخول: ${fmtPrice(entryPrice)}
+💰 الخروج: ${fmtPrice(contractPrice)}
+
+📉 النتيجة النهائية: ${fmtPercent(pnl)}
 
 🛑 وقف السهم: ${fmtPrice(trade.stock_stop_price)}`
         );
@@ -894,16 +940,86 @@ async function updateOpenTrades() {
         continue;
       }
 
-      await supabase
-        .from('active_trades')
-        .update({
-          current_contract_price: contractPrice
-        })
-        .eq('id', trade.id);
+      if (hitTp2 && !trade.tp2_hit) {
+        await supabase
+          .from('active_trades')
+          .update({
+            tp1_hit: true,
+            tp2_hit: true,
+            current_contract_price: contractPrice,
+            last_update_bucket: currentBucket
+          })
+          .eq('id', trade.id);
 
-      await sendToActiveUsers(
-        buildUpdateMessage(trade, contractPrice, stock.price)
-      );
+        await sendToActiveUsers(
+`🎯 تحقق الهدف الثاني
+
+📊 السهم: ${trade.symbol}
+📈 النوع: ${sideArabic(trade.side)}
+
+💰 الدخول: ${fmtPrice(entryPrice)}
+💰 الحالي: ${fmtPrice(contractPrice)}
+
+📈 الربح الحالي: ${fmtPercent(pnl)}
+
+🎯 هدف السهم الثاني: ${fmtPrice(trade.stock_target_2)}`
+        );
+
+        continue;
+      }
+
+      if (hitTp1 && !trade.tp1_hit) {
+        await supabase
+          .from('active_trades')
+          .update({
+            tp1_hit: true,
+            current_contract_price: contractPrice,
+            last_update_bucket: currentBucket
+          })
+          .eq('id', trade.id);
+
+        await sendToActiveUsers(
+`🎯 تحقق الهدف الأول
+
+📊 السهم: ${trade.symbol}
+📈 النوع: ${sideArabic(trade.side)}
+
+💰 الدخول: ${fmtPrice(entryPrice)}
+💰 الحالي: ${fmtPrice(contractPrice)}
+
+📈 الربح الحالي: ${fmtPercent(pnl)}
+
+🎯 هدف السهم الأول: ${fmtPrice(trade.stock_target_1)}`
+        );
+
+        continue;
+      }
+
+      if (currentBucket !== lastBucket && Math.abs(currentBucket) >= 1) {
+        await supabase
+          .from('active_trades')
+          .update({
+            current_contract_price: contractPrice,
+            last_update_bucket: currentBucket
+          })
+          .eq('id', trade.id);
+
+        await sendToActiveUsers(
+          buildUpdateMessage(
+            trade,
+            contractPrice,
+            stock.price,
+            pnl
+          )
+        );
+      } else {
+        await supabase
+          .from('active_trades')
+          .update({
+            current_contract_price: contractPrice
+          })
+          .eq('id', trade.id);
+      }
 
       await new Promise(resolve =>
         setTimeout(resolve, 500)
@@ -1074,6 +1190,13 @@ ${days} يوم`
 bot.onText(/\/scan/, async (msg) => {
   if (!isAdmin(msg)) return;
 
+  if (!isUsMarketTimeSaudi()) {
+    return bot.sendMessage(
+      msg.chat.id,
+      '⏸ السوق الأمريكي مغلق حالياً. الفحص يعمل فقط وقت السوق.'
+    );
+  }
+
   await bot.sendMessage(
     msg.chat.id,
     '🔎 بدأ فحص سهم واحد الآن...'
@@ -1105,7 +1228,9 @@ bot.onText(/\/open/, async (msg) => {
 📅 ${t.expiration}
 💰 الدخول: ${fmtPrice(t.entry_contract_price)}
 🛑 الوقف: ${fmtPrice(t.stock_stop_price)}
-🎯 الهدف: ${fmtPrice(t.stock_target_1)}`
+🎯 الهدف الأول: ${fmtPrice(t.stock_target_1)}
+🎯 الهدف الثاني: ${fmtPrice(t.stock_target_2)}
+🎯 الهدف الثالث: ${fmtPrice(t.stock_target_3)}`
   ).join('\n\n');
 
   await bot.sendMessage(msg.chat.id, text);
@@ -1146,34 +1271,6 @@ bot.on('message', async (msg) => {
 // =====================
 // Intervals
 // =====================
-
-function isUsMarketTimeSaudi() {
-  const now = new Date();
-
-  const saTime = new Date(
-    now.toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })
-  );
-
-  const day = saTime.getDay(); // الأحد 0 - السبت 6
-  const hour = saTime.getHours();
-  const minute = saTime.getMinutes();
-
-  // إيقاف السبت والأحد
-  if (day === 0 || day === 6) return false;
-
-  const totalMinutes = hour * 60 + minute;
-
-  // وقت السوق الصيفي تقريباً: 4:30 م إلى 11:00 م السعودية
-  const summerOpen = 16 * 60 + 30;
-  const summerClose = 23 * 60;
-
-  // وقت السوق الشتوي تقريباً: 5:30 م إلى 12:00 ليلاً السعودية
-  const winterOpen = 17 * 60 + 30;
-  const winterClose = 24 * 60;
-
-  // نخليها مرنة وتشمل الفترتين
-  return totalMinutes >= summerOpen && totalMinutes <= winterClose;
-}
 
 setInterval(() => {
   if (!isUsMarketTimeSaudi()) {
