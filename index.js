@@ -2,41 +2,82 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+const bot = new TelegramBot(process.env.BOT_TOKEN, {
+  polling: true
+});
 
 const API_KEY = process.env.MASSIVE_API_KEY;
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 
 const ADMIN_IDS = String(process.env.ADMIN_IDS || '')
   .split(',')
   .map(x => x.trim())
   .filter(Boolean);
 
-const WATCHLIST = ['TSLA','NVDA','AAPL','PLTR','AMD','META','MSFT','MSTR','SPY','QQQ'];
+const WATCHLIST = [
+  'TSLA',
+  'NVDA',
+  'AAPL',
+  'PLTR',
+  'AMD',
+  'META',
+  'MSFT',
+  'MSTR',
+  'SPY',
+  'QQQ'
+];
 
-const SCAN_INTERVAL_MS = 3 * 60 * 1000;
+// فحص سهم واحد كل دقيقة لتخفيف ضغط Massive
+const SCAN_INTERVAL_MS = 60 * 1000;
+
+// تحديث الصفقات كل 5 دقائق
 const UPDATE_INTERVAL_MS = 5 * 60 * 1000;
+
 const COOLDOWN_HOURS = 24;
 
 let scannerRunning = false;
+let scanIndex = 0;
+
+// =====================
+// Helpers
+// =====================
 
 function fmt(n) {
-  if (n === undefined || n === null || isNaN(Number(n))) return 'غير متوفر';
+  if (n === undefined || n === null || isNaN(Number(n))) {
+    return 'غير متوفر';
+  }
+
   return Number(n).toLocaleString('en-US');
 }
 
 function fmtPrice(n) {
-  if (n === undefined || n === null || isNaN(Number(n))) return 'غير متوفر';
+  if (n === undefined || n === null || isNaN(Number(n))) {
+    return 'غير متوفر';
+  }
+
   return Number(n).toFixed(2);
 }
 
 function fmtPercent(n) {
-  if (n === undefined || n === null || isNaN(Number(n))) return 'غير متوفر';
+  if (n === undefined || n === null || isNaN(Number(n))) {
+    return 'غير متوفر';
+  }
+
   return `${Number(n).toFixed(2)}%`;
 }
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function addDaysIso(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + Number(days));
+  return d.toISOString();
 }
 
 function addHoursIso(hours) {
@@ -45,18 +86,57 @@ function addHoursIso(hours) {
   return d.toISOString();
 }
 
+function formatDate(v) {
+  if (!v) return 'غير متوفر';
+
+  return new Date(v).toLocaleString('ar-SA', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
 function daysToExpiration(expiration) {
   const today = new Date();
   const exp = new Date(expiration);
-  return Math.ceil((exp - today) / (1000 * 60 * 60 * 24));
+
+  return Math.ceil(
+    (exp - today) / (1000 * 60 * 60 * 24)
+  );
 }
 
 function isAdmin(msg) {
-  return ADMIN_IDS.includes(String(msg.from?.id || ''));
+  const fromId = String(msg.from?.id || '');
+  const chatId = String(msg.chat?.id || '');
+
+  return (
+    ADMIN_IDS.includes(fromId) ||
+    ADMIN_IDS.includes(chatId)
+  );
 }
 
 function sideArabic(side) {
   return side === 'CALL' ? 'كول' : 'بوت';
+}
+
+function generateCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+  let code = 'ST-';
+
+  for (let i = 0; i < 4; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+
+  code += '-';
+
+  for (let i = 0; i < 4; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+
+  return code;
 }
 
 function getType(item) {
@@ -107,7 +187,11 @@ function getMid(item) {
     return Number(((bid + ask) / 2).toFixed(2));
   }
 
-  return Number(item?.last_trade?.price || item?.day?.close || 0);
+  return Number(
+    item?.last_trade?.price ||
+    item?.day?.close ||
+    0
+  );
 }
 
 function spreadPercent(item) {
@@ -116,20 +200,31 @@ function spreadPercent(item) {
   const mid = getMid(item);
 
   if (!bid || !ask || !mid) return 999;
+
   return ((ask - bid) / mid) * 100;
 }
 
 function distancePercent(strike, price) {
   if (!strike || !price) return 999;
-  return Math.abs(((strike - price) / price) * 100);
+
+  return Math.abs(
+    ((strike - price) / price) * 100
+  );
 }
 
 function isContractPriceOk(price) {
   return price >= 1.50 && price <= 2.20;
 }
 
+// =====================
+// Massive API
+// =====================
+
 async function apiGet(url) {
-  if (!API_KEY) throw new Error('Missing MASSIVE_API_KEY');
+  if (!API_KEY) {
+    throw new Error('Missing MASSIVE_API_KEY');
+  }
+
   const res = await axios.get(url);
   return res.data;
 }
@@ -160,7 +255,9 @@ async function getStockSnapshot(symbol) {
   if (!last || !prev) return null;
 
   const price = last.c;
-  const change = prev.c ? ((price - prev.c) / prev.c) * 100 : 0;
+
+  const change =
+    prev.c ? ((price - prev.c) / prev.c) * 100 : 0;
 
   const recentHigh = Math.max(...bars.map(x => x.h));
   const recentLow = Math.min(...bars.map(x => x.l));
@@ -180,11 +277,152 @@ async function getOptionsChain(symbol) {
     `https://api.massive.com/v3/snapshot/options/${symbol}?limit=250&apiKey=${API_KEY}`;
 
   const data = await apiGet(url);
+
   return data.results || [];
 }
 
+// =====================
+// Subscription System
+// =====================
+
+async function createActivationCode(days = 30) {
+  const code = generateCode();
+  const expiresAt = addDaysIso(days);
+
+  const { error } = await supabase
+    .from('activation_codes')
+    .insert({
+      code,
+      days: Number(days),
+      used: false,
+      expires_at: expiresAt
+    });
+
+  if (error) throw error;
+
+  return {
+    code,
+    days,
+    expiresAt
+  };
+}
+
+async function getUserAccess(userId) {
+  const { data, error } = await supabase
+    .from('users_access')
+    .select('*')
+    .eq('telegram_id', String(userId))
+    .maybeSingle();
+
+  if (error) throw error;
+
+  return data || null;
+}
+
+async function hasActiveAccess(userId) {
+  if (ADMIN_IDS.includes(String(userId))) {
+    return true;
+  }
+
+  const user = await getUserAccess(userId);
+
+  if (!user || !user.expires_at) return false;
+
+  return new Date(user.expires_at).getTime() > Date.now();
+}
+
+async function redeemCode(msg, code) {
+  const userId = String(msg.from.id);
+  const username = msg.from.username || null;
+
+  const cleanCode = String(code || '')
+    .trim()
+    .toUpperCase();
+
+  const { data: activation, error } = await supabase
+    .from('activation_codes')
+    .select('*')
+    .eq('code', cleanCode)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  if (!activation) {
+    return {
+      ok: false,
+      message: '❌ كود التفعيل غير صحيح.'
+    };
+  }
+
+  if (activation.used) {
+    return {
+      ok: false,
+      message: '⚠️ هذا الكود مستخدم مسبقاً.'
+    };
+  }
+
+  if (
+    activation.expires_at &&
+    new Date(activation.expires_at).getTime() < Date.now()
+  ) {
+    return {
+      ok: false,
+      message: '⚠️ هذا الكود منتهي الصلاحية.'
+    };
+  }
+
+  const userExpiresAt = addDaysIso(activation.days);
+
+  const { error: updateCodeError } = await supabase
+    .from('activation_codes')
+    .update({
+      used: true,
+      used_by: userId
+    })
+    .eq('code', cleanCode)
+    .eq('used', false);
+
+  if (updateCodeError) throw updateCodeError;
+
+  const { error: userError } = await supabase
+    .from('users_access')
+    .upsert(
+      {
+        telegram_id: userId,
+        username,
+        expires_at: userExpiresAt
+      },
+      {
+        onConflict: 'telegram_id'
+      }
+    );
+
+  if (userError) throw userError;
+
+  return {
+    ok: true,
+    message:
+`✅ تم تفعيل اشتراكك بنجاح.
+
+⏳ مدة الاشتراك:
+${activation.days} يوم
+
+📅 ينتهي في:
+${formatDate(userExpiresAt)}
+
+سيصلك تنبيه تلقائي عند اكتشاف سيولة قوية.`
+  };
+}
+
+// =====================
+// Supabase Trades
+// =====================
+
 async function getActiveUsers() {
-  const { data, error } = await supabase.from('users_access').select('*');
+  const { data, error } = await supabase
+    .from('users_access')
+    .select('*');
+
   if (error) throw error;
 
   const now = Date.now();
@@ -204,6 +442,7 @@ async function hasOpenTrade(symbol) {
     .maybeSingle();
 
   if (error) throw error;
+
   return !!data;
 }
 
@@ -215,6 +454,7 @@ async function isInCooldown(symbol) {
     .maybeSingle();
 
   if (error) throw error;
+
   if (!data) return false;
 
   return new Date(data.cooldown_until).getTime() > Date.now();
@@ -229,14 +469,19 @@ async function setCooldown(symbol, reason) {
         reason,
         cooldown_until: addHoursIso(COOLDOWN_HOURS)
       },
-      { onConflict: 'symbol' }
+      {
+        onConflict: 'symbol'
+      }
     );
 
   if (error) throw error;
 }
 
 async function saveTrade(trade) {
-  const { error } = await supabase.from('active_trades').insert(trade);
+  const { error } = await supabase
+    .from('active_trades')
+    .insert(trade);
+
   if (error) throw error;
 }
 
@@ -247,6 +492,7 @@ async function getOpenTrades() {
     .eq('status', 'OPEN');
 
   if (error) throw error;
+
   return data || [];
 }
 
@@ -263,6 +509,10 @@ async function closeTrade(id, reason, currentPrice) {
 
   if (error) throw error;
 }
+
+// =====================
+// Flow Logic
+// =====================
 
 function getDynamicDteRange(symbol, score, distance, spread, stockChange) {
   const fastSymbols = ['SPY', 'QQQ', 'TSLA', 'NVDA', 'MSTR'];
@@ -337,14 +587,20 @@ function detectSide(chain, stock) {
     if (type === 'PUT') putScore += s;
   }
 
-  if (callScore > putScore * 1.25 && stock.change > 0) return 'CALL';
-  if (putScore > callScore * 1.25 && stock.change < 0) return 'PUT';
+  if (callScore > putScore * 1.25 && stock.change > 0) {
+    return 'CALL';
+  }
+
+  if (putScore > callScore * 1.25 && stock.change < 0) {
+    return 'PUT';
+  }
 
   return null;
 }
 
 function pickBestContract(symbol, chain, stock) {
   const side = detectSide(chain, stock);
+
   if (!side) return null;
 
   const candidates = [];
@@ -384,6 +640,7 @@ function pickBestContract(symbol, chain, stock) {
   }
 
   candidates.sort((a, b) => b.score - a.score);
+
   return candidates[0] || null;
 }
 
@@ -406,6 +663,10 @@ function buildLevels(side, stock) {
   };
 }
 
+// =====================
+// Messages
+// =====================
+
 async function sendToActiveUsers(text) {
   const users = await getActiveUsers();
 
@@ -417,9 +678,16 @@ async function sendToActiveUsers(text) {
   for (const user of users) {
     try {
       await bot.sendMessage(user.telegram_id, text);
-      await new Promise(resolve => setTimeout(resolve, 250));
+
+      await new Promise(resolve =>
+        setTimeout(resolve, 250)
+      );
     } catch (err) {
-      console.error('Send failed:', user.telegram_id, err.message);
+      console.error(
+        'Send failed:',
+        user.telegram_id,
+        err.message
+      );
     }
   }
 }
@@ -476,6 +744,10 @@ function buildUpdateMessage(trade, currentContractPrice, stockPrice) {
 🎯 الهدف الأول: ${fmtPrice(trade.stock_target_1)}`;
 }
 
+// =====================
+// Scanner
+// =====================
+
 async function scanSymbol(symbol) {
   if (await hasOpenTrade(symbol)) return;
   if (await isInCooldown(symbol)) return;
@@ -509,36 +781,50 @@ async function scanSymbol(symbol) {
   };
 
   await saveTrade(trade);
-  await sendToActiveUsers(buildEntryMessage(symbol, stock, best, levels));
+
+  await sendToActiveUsers(
+    buildEntryMessage(symbol, stock, best, levels)
+  );
 }
 
-async function scanMarket() {
+async function scanNextSymbol() {
   if (scannerRunning) return;
 
   scannerRunning = true;
 
+  const symbol = WATCHLIST[scanIndex];
+
+  scanIndex = (scanIndex + 1) % WATCHLIST.length;
+
   try {
-    console.log('Scanning market...');
+    console.log(`Scanning one symbol: ${symbol}`);
 
-    for (const symbol of WATCHLIST) {
-      try {
-        await scanSymbol(symbol);
-        await new Promise(resolve => setTimeout(resolve, 700));
-      } catch (err) {
-        console.error(`Scan error ${symbol}:`, err.response?.data || err.message);
-      }
-    }
+    await scanSymbol(symbol);
 
-    console.log('Scan completed.');
+    console.log(`Scan completed: ${symbol}`);
+  } catch (err) {
+    console.error(
+      `Scan error ${symbol}:`,
+      err.response?.data || err.message
+    );
   } finally {
     scannerRunning = false;
   }
 }
 
+// =====================
+// Trade Updates
+// =====================
+
 async function getContractPriceFromChain(symbol, contractTicker) {
   const chain = await getOptionsChain(symbol);
-  const item = chain.find(x => getContractTicker(x) === contractTicker);
+
+  const item = chain.find(x =>
+    getContractTicker(x) === contractTicker
+  );
+
   if (!item) return null;
+
   return getMid(item);
 }
 
@@ -610,19 +896,30 @@ async function updateOpenTrades() {
 
       await supabase
         .from('active_trades')
-        .update({ current_contract_price: contractPrice })
+        .update({
+          current_contract_price: contractPrice
+        })
         .eq('id', trade.id);
 
       await sendToActiveUsers(
         buildUpdateMessage(trade, contractPrice, stock.price)
       );
 
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve =>
+        setTimeout(resolve, 500)
+      );
     } catch (err) {
-      console.error(`Update trade error ${trade.symbol}:`, err.response?.data || err.message);
+      console.error(
+        `Update trade error ${trade.symbol}:`,
+        err.response?.data || err.message
+      );
     }
   }
 }
+
+// =====================
+// Bot Commands
+// =====================
 
 bot.onText(/\/start/, async (msg) => {
   await bot.sendMessage(
@@ -630,6 +927,11 @@ bot.onText(/\/start/, async (msg) => {
 `🎯 أهلاً بك في ST صائد السيولة
 
 البوت يراقب الأسهم الأمريكية عالية السيولة ويبحث عن دخول سيولة قوي في عقود الأوبشن.
+
+لتفعيل اشتراكك:
+أرسل كود التفعيل مباشرة مثل:
+
+ST-ABCD-1234
 
 الأوامر:
 /mysub حالة الاشتراك
@@ -652,26 +954,81 @@ ${msg.chat.id}`
 });
 
 bot.onText(/\/mysub/, async (msg) => {
-  const { data, error } = await supabase
-    .from('users_access')
-    .select('*')
-    .eq('telegram_id', String(msg.from.id))
-    .maybeSingle();
+  try {
+    const user = await getUserAccess(msg.from.id);
 
-  if (error) return bot.sendMessage(msg.chat.id, 'حدث خطأ أثناء فحص الاشتراك.');
-  if (!data) return bot.sendMessage(msg.chat.id, '❌ لا يوجد اشتراك فعال.');
+    if (!user) {
+      return bot.sendMessage(
+        msg.chat.id,
+        '❌ لا يوجد اشتراك فعال.'
+      );
+    }
 
-  const active = new Date(data.expires_at).getTime() > Date.now();
+    const active =
+      new Date(user.expires_at).getTime() > Date.now();
 
-  await bot.sendMessage(
-    msg.chat.id,
+    await bot.sendMessage(
+      msg.chat.id,
 `📊 حالة الاشتراك
 
 ${active ? '✅ فعال' : '❌ منتهي'}
 
 📅 ينتهي في:
-${new Date(data.expires_at).toLocaleString('ar-SA')}`
-  );
+${formatDate(user.expires_at)}`
+    );
+  } catch (err) {
+    console.error(err);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      'حدث خطأ أثناء فحص الاشتراك.'
+    );
+  }
+});
+
+bot.onText(/\/create (\d+)/, async (msg, match) => {
+  try {
+    if (!isAdmin(msg)) {
+      return bot.sendMessage(
+        msg.chat.id,
+        '🚫 هذا الأمر للإدارة فقط'
+      );
+    }
+
+    const days = Number(match[1]);
+
+    if (!days || days <= 0) {
+      return bot.sendMessage(
+        msg.chat.id,
+        '⚠️ اكتب عدد أيام صحيح. مثال: /create 30'
+      );
+    }
+
+    const result = await createActivationCode(days);
+
+    await bot.sendMessage(
+      msg.chat.id,
+`✅ تم إنشاء كود تفعيل جديد
+
+🔑 الكود:
+${result.code}
+
+⏳ مدة الاشتراك:
+${days} يوم
+
+📅 صلاحية الكود:
+${formatDate(result.expiresAt)}
+
+أرسل هذا الكود للمشترك ليقوم بتفعيله داخل البوت.`
+    );
+  } catch (err) {
+    console.error(err);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      `❌ فشل إنشاء الكود\n${err.message}`
+    );
+  }
 });
 
 bot.onText(/\/adduser (\d+) (\d+)/, async (msg, match) => {
@@ -690,10 +1047,17 @@ bot.onText(/\/adduser (\d+) (\d+)/, async (msg, match) => {
         telegram_id: telegramId,
         expires_at: d.toISOString()
       },
-      { onConflict: 'telegram_id' }
+      {
+        onConflict: 'telegram_id'
+      }
     );
 
-  if (error) return bot.sendMessage(msg.chat.id, `خطأ:\n${error.message}`);
+  if (error) {
+    return bot.sendMessage(
+      msg.chat.id,
+      `خطأ:\n${error.message}`
+    );
+  }
 
   await bot.sendMessage(
     msg.chat.id,
@@ -710,9 +1074,17 @@ ${days} يوم`
 bot.onText(/\/scan/, async (msg) => {
   if (!isAdmin(msg)) return;
 
-  await bot.sendMessage(msg.chat.id, '🔎 بدأ فحص السوق الآن...');
-  await scanMarket();
-  await bot.sendMessage(msg.chat.id, '✅ انتهى الفحص.');
+  await bot.sendMessage(
+    msg.chat.id,
+    '🔎 بدأ فحص سهم واحد الآن...'
+  );
+
+  await scanNextSymbol();
+
+  await bot.sendMessage(
+    msg.chat.id,
+    '✅ انتهى الفحص.'
+  );
 });
 
 bot.onText(/\/open/, async (msg) => {
@@ -720,7 +1092,12 @@ bot.onText(/\/open/, async (msg) => {
 
   const trades = await getOpenTrades();
 
-  if (!trades.length) return bot.sendMessage(msg.chat.id, 'لا توجد صفقات مفتوحة.');
+  if (!trades.length) {
+    return bot.sendMessage(
+      msg.chat.id,
+      'لا توجد صفقات مفتوحة.'
+    );
+  }
 
   const text = trades.map(t =>
 `📊 ${t.symbol} ${sideArabic(t.side)}
@@ -734,7 +1111,43 @@ bot.onText(/\/open/, async (msg) => {
   await bot.sendMessage(msg.chat.id, text);
 });
 
-setInterval(scanMarket, SCAN_INTERVAL_MS);
+// =====================
+// Activation Code Handler
+// =====================
+
+bot.on('message', async (msg) => {
+  const text = String(msg.text || '').trim();
+
+  if (!text) return;
+  if (text.startsWith('/')) return;
+
+  const isActivationCode =
+    /^ST-[A-Z0-9]{4}-[A-Z0-9]{4}$/i.test(text);
+
+  if (!isActivationCode) return;
+
+  try {
+    const result = await redeemCode(msg, text);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      result.message
+    );
+  } catch (err) {
+    console.error(err);
+
+    await bot.sendMessage(
+      msg.chat.id,
+      '❌ حدث خطأ أثناء تفعيل الكود.'
+    );
+  }
+});
+
+// =====================
+// Intervals
+// =====================
+
+setInterval(scanNextSymbol, SCAN_INTERVAL_MS);
 setInterval(updateOpenTrades, UPDATE_INTERVAL_MS);
 
 console.log('🎯 ST Liquidity Hunter Bot Started');
