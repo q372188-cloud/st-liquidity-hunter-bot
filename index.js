@@ -236,8 +236,9 @@ function distancePercent(strike, price) {
   );
 }
 
+// فلتر وسط: لا هو قاسي مثل السابق، ولا خفيف لدرجة يجيب عقود ضعيفة جداً
 function isContractPriceOk(price) {
-  return price >= 1.50 && price <= 2.20;
+  return price >= 1.00 && price <= 4.00;
 }
 // =====================
 // Massive API
@@ -597,6 +598,7 @@ function scoreContract(item, stock) {
   };
 }
 
+// فلتر وسط للاتجاه: كان 1.25 قاسي جداً
 function detectSide(chain, stock) {
   let callScore = 0;
   let putScore = 0;
@@ -609,11 +611,18 @@ function detectSide(chain, stock) {
     if (type === 'PUT') putScore += s;
   }
 
-  if (callScore > putScore * 1.25 && stock.change > 0) {
+  console.log('Side scores:', {
+    symbol: stock.symbol,
+    change: stock.change,
+    callScore,
+    putScore
+  });
+
+  if (callScore > putScore * 1.15 && stock.change > -0.5) {
     return 'CALL';
   }
 
-  if (putScore > callScore * 1.25 && stock.change < 0) {
+  if (putScore > callScore * 1.15 && stock.change < 0.5) {
     return 'PUT';
   }
 
@@ -623,9 +632,23 @@ function detectSide(chain, stock) {
 function pickBestContract(symbol, chain, stock) {
   const side = detectSide(chain, stock);
 
-  if (!side) return null;
+  if (!side) {
+    console.log(`${symbol} skipped: no clear side`);
+    return null;
+  }
 
   const candidates = [];
+
+  let rejected = {
+    dte: 0,
+    score: 0,
+    price: 0,
+    spread: 0,
+    distance: 0,
+    delta: 0,
+    volume: 0,
+    passed: 0
+  };
 
   for (const item of chain) {
     if (getType(item) !== side) continue;
@@ -644,13 +667,46 @@ function pickBestContract(symbol, chain, stock) {
       stock.change
     );
 
-    if (dte < dteRange.min || dte > dteRange.max) continue;
-    if (metrics.score < 75) continue;
-    if (!isContractPriceOk(metrics.price)) continue;
-    if (metrics.spread > 15) continue;
-    if (metrics.distance > 7) continue;
-    if (metrics.delta < 0.20 || metrics.delta > 0.70) continue;
-    if (metrics.volume < 1000) continue;
+    if (dte < dteRange.min || dte > dteRange.max) {
+      rejected.dte++;
+      continue;
+    }
+
+    // فلتر وسط بدلاً من 75
+    if (metrics.score < 65) {
+      rejected.score++;
+      continue;
+    }
+
+    // فلتر سعر وسط بدلاً من 1.50 - 2.20
+    if (!isContractPriceOk(metrics.price)) {
+      rejected.price++;
+      continue;
+    }
+
+    // فلتر سبريد وسط بدلاً من 15
+    if (metrics.spread > 20) {
+      rejected.spread++;
+      continue;
+    }
+
+    if (metrics.distance > 7) {
+      rejected.distance++;
+      continue;
+    }
+
+    if (metrics.delta < 0.20 || metrics.delta > 0.70) {
+      rejected.delta++;
+      continue;
+    }
+
+    // فلتر حجم وسط بدلاً من 1000
+    if (metrics.volume < 300) {
+      rejected.volume++;
+      continue;
+    }
+
+    rejected.passed++;
 
     candidates.push({
       item,
@@ -661,9 +717,28 @@ function pickBestContract(symbol, chain, stock) {
     });
   }
 
+  console.log(`${symbol} filter report:`, rejected);
+
   candidates.sort((a, b) => b.score - a.score);
 
-  return candidates[0] || null;
+  if (!candidates.length) {
+    console.log(`${symbol} skipped: no contract passed middle filters`);
+    return null;
+  }
+
+  console.log(`${symbol} best contract:`, {
+    side: candidates[0].side,
+    strike: candidates[0].strike,
+    expiration: getExpiration(candidates[0].item),
+    price: candidates[0].price,
+    score: candidates[0].score,
+    volume: candidates[0].volume,
+    spread: candidates[0].spread,
+    delta: candidates[0].delta,
+    distance: candidates[0].distance
+  });
+
+  return candidates[0];
 }
 
 function buildLevels(side, stock) {
@@ -686,22 +761,34 @@ function buildLevels(side, stock) {
     target3: Number((stock.recentLow - buffer * 3).toFixed(2))
   };
 }
-
 // =====================
 // Messages
 // =====================
 
+// تم تعديلها: ترسل للإدمن دائماً + المشتركين الفعالين
 async function sendToActiveUsers(text) {
   const users = await getActiveUsers();
 
-  if (!users.length) {
-    console.log('No active users to send.');
-    return;
+  const receivers = new Set();
+
+  for (const id of ADMIN_IDS) {
+    if (id) receivers.add(String(id));
   }
 
   for (const user of users) {
+    if (user.telegram_id) {
+      receivers.add(String(user.telegram_id));
+    }
+  }
+
+  if (!receivers.size) {
+    console.log('No receivers to send.');
+    return;
+  }
+
+  for (const chatId of receivers) {
     try {
-      await bot.sendMessage(user.telegram_id, text);
+      await bot.sendMessage(chatId, text);
 
       await new Promise(resolve =>
         setTimeout(resolve, 250)
@@ -709,7 +796,7 @@ async function sendToActiveUsers(text) {
     } catch (err) {
       console.error(
         'Send failed:',
-        user.telegram_id,
+        chatId,
         err.message
       );
     }
@@ -772,17 +859,48 @@ function buildUpdateMessage(trade, currentContractPrice, stockPrice, pnl) {
 // =====================
 
 async function scanSymbol(symbol) {
-  if (await hasOpenTrade(symbol)) return;
-  if (await isInCooldown(symbol)) return;
+  console.log(`--- Checking ${symbol} ---`);
+
+  if (await hasOpenTrade(symbol)) {
+    console.log(`${symbol} skipped: open trade exists`);
+    return;
+  }
+
+  if (await isInCooldown(symbol)) {
+    console.log(`${symbol} skipped: cooldown`);
+    return;
+  }
 
   const stock = await getStockSnapshot(symbol);
-  if (!stock) return;
+
+  if (!stock) {
+    console.log(`${symbol} skipped: no stock snapshot`);
+    return;
+  }
+
+  console.log(`${symbol} stock snapshot:`, {
+    price: stock.price,
+    change: stock.change,
+    recentHigh: stock.recentHigh,
+    recentLow: stock.recentLow,
+    volume: stock.volume
+  });
 
   const chain = await getOptionsChain(symbol);
-  if (!chain.length) return;
+
+  if (!chain.length) {
+    console.log(`${symbol} skipped: empty options chain`);
+    return;
+  }
+
+  console.log(`${symbol} chain count: ${chain.length}`);
 
   const best = pickBestContract(symbol, chain, stock);
-  if (!best) return;
+
+  if (!best) {
+    console.log(`${symbol} skipped: no valid contract`);
+    return;
+  }
 
   const levels = buildLevels(best.side, stock);
 
@@ -809,6 +927,8 @@ async function scanSymbol(symbol) {
   };
 
   await saveTrade(trade);
+
+  console.log(`${symbol} trade saved and sending alert`);
 
   await sendToActiveUsers(
     buildEntryMessage(symbol, stock, best, levels)
@@ -1101,7 +1221,6 @@ ${formatDate(user.expires_at)}`
     );
   }
 });
-
 bot.onText(/\/create (\d+)/, async (msg, match) => {
   try {
     if (!isAdmin(msg)) {
@@ -1206,7 +1325,7 @@ bot.onText(/\/scan/, async (msg) => {
 
   await bot.sendMessage(
     msg.chat.id,
-    '✅ انتهى الفحص.'
+    '✅ انتهى الفحص. راجع Railway Logs لمعرفة سبب القبول أو الرفض.'
   );
 });
 
@@ -1234,6 +1353,43 @@ bot.onText(/\/open/, async (msg) => {
   ).join('\n\n');
 
   await bot.sendMessage(msg.chat.id, text);
+});
+
+// أمر تشخيص سريع
+bot.onText(/\/status/, async (msg) => {
+  if (!isAdmin(msg)) return;
+
+  try {
+    const users = await getActiveUsers();
+    const trades = await getOpenTrades();
+
+    await bot.sendMessage(
+      msg.chat.id,
+`📊 حالة البوت
+
+✅ البوت يعمل
+
+👥 المشتركين الفعالين:
+${users.length}
+
+📌 الصفقات المفتوحة:
+${trades.length}
+
+🔎 السهم القادم للفحص:
+${WATCHLIST[scanIndex]}
+
+⏱ وقت السوق الآن:
+${isUsMarketTimeSaudi() ? 'مفتوح' : 'مغلق'}
+
+🧪 نسخة الفلاتر:
+وسط / Balanced`
+    );
+  } catch (err) {
+    await bot.sendMessage(
+      msg.chat.id,
+      `❌ خطأ في فحص الحالة:\n${err.message}`
+    );
+  }
 });
 
 // =====================
@@ -1290,4 +1446,4 @@ setInterval(() => {
   updateOpenTrades();
 }, UPDATE_INTERVAL_MS);
 
-console.log('🎯 ST Liquidity Hunter Bot Started');
+console.log('🎯 ST Liquidity Hunter Bot Started - Balanced Filters Version');
