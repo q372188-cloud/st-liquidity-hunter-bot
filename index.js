@@ -31,8 +31,8 @@ const WATCHLIST = [
   'QQQ'
 ];
 
-// فحص سهم واحد كل دقيقة لتخفيف ضغط Massive
-const SCAN_INTERVAL_MS = 60 * 1000;
+// تم رفعها من دقيقة إلى 3 دقائق لتخفيف ضغط Massive API
+const SCAN_INTERVAL_MS = 3 * 60 * 1000;
 
 // تحديث الصفقات كل 5 دقائق
 const UPDATE_INTERVAL_MS = 5 * 60 * 1000;
@@ -40,8 +40,17 @@ const UPDATE_INTERVAL_MS = 5 * 60 * 1000;
 const COOLDOWN_HOURS = 24;
 const UPDATE_BUCKET_PERCENT = 10;
 
+// منع تكرار /scan بسرعة
+const MANUAL_SCAN_COOLDOWN_MS = 60 * 1000;
+let lastManualScanAt = 0;
+
 let scannerRunning = false;
 let scanIndex = 0;
+
+// كاش لتقليل طلبات Massive
+const CACHE_MS = 90 * 1000;
+const stockCache = new Map();
+const optionsCache = new Map();
 
 // =====================
 // Helpers
@@ -151,14 +160,12 @@ function isUsMarketTimeSaudi() {
   const hour = saTime.getHours();
   const minute = saTime.getMinutes();
 
-  // الأحد 0 - السبت 6
   if (day === 0 || day === 6) return false;
 
   const totalMinutes = hour * 60 + minute;
 
-  // فترة مرنة تغطي الصيف والشتاء بتوقيت السعودية
-  const open = 16 * 60 + 30;   // 4:30 م
-  const close = 24 * 60;       // 12:00 ليل
+  const open = 16 * 60 + 30;
+  const close = 24 * 60;
 
   return totalMinutes >= open && totalMinutes <= close;
 }
@@ -186,7 +193,6 @@ function getVolume(item) {
 function getOI(item) {
   return Number(item?.open_interest || 0);
 }
-
 function getDelta(item) {
   return Number(item?.greeks?.delta || 0);
 }
@@ -236,10 +242,26 @@ function distancePercent(strike, price) {
   );
 }
 
-// فلتر وسط: لا هو قاسي مثل السابق، ولا خفيف لدرجة يجيب عقود ضعيفة جداً
+// فلتر وسط
 function isContractPriceOk(price) {
   return price >= 1.00 && price <= 4.00;
 }
+
+function isRateLimitError(err) {
+  const status = err.response?.status;
+  const apiStatus = err.response?.data?.status;
+  const message = String(
+    err.response?.data?.error ||
+    err.message ||
+    ''
+  ).toLowerCase();
+
+  return (
+    status === 429 ||
+    apiStatus === 'ERROR' && message.includes('exceeded')
+  );
+}
+
 // =====================
 // Massive API
 // =====================
@@ -249,11 +271,30 @@ async function apiGet(url) {
     throw new Error('Missing MASSIVE_API_KEY');
   }
 
-  const res = await axios.get(url);
-  return res.data;
+  try {
+    const res = await axios.get(url, {
+      timeout: 15000
+    });
+
+    return res.data;
+  } catch (err) {
+    if (isRateLimitError(err)) {
+      console.error('Massive API rate limit reached.');
+      throw new Error('MASSIVE_RATE_LIMIT');
+    }
+
+    throw err;
+  }
 }
 
 async function getStockSnapshot(symbol) {
+  const cached = stockCache.get(symbol);
+
+  if (cached && Date.now() - cached.time < CACHE_MS) {
+    console.log(`${symbol} stock from cache`);
+    return cached.data;
+  }
+
   const now = new Date();
   const to = now.toISOString().split('T')[0];
 
@@ -267,10 +308,8 @@ async function getStockSnapshot(symbol) {
   const prevUrl =
     `https://api.massive.com/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${API_KEY}`;
 
-  const [minuteData, prevData] = await Promise.all([
-    apiGet(minuteUrl),
-    apiGet(prevUrl)
-  ]);
+  const minuteData = await apiGet(minuteUrl);
+  const prevData = await apiGet(prevUrl);
 
   const bars = minuteData?.results || [];
   const last = bars[0];
@@ -286,7 +325,7 @@ async function getStockSnapshot(symbol) {
   const recentHigh = Math.max(...bars.map(x => x.h));
   const recentLow = Math.min(...bars.map(x => x.l));
 
-  return {
+  const data = {
     symbol,
     price,
     change,
@@ -294,15 +333,35 @@ async function getStockSnapshot(symbol) {
     recentLow,
     volume: last.v
   };
+
+  stockCache.set(symbol, {
+    time: Date.now(),
+    data
+  });
+
+  return data;
 }
 
 async function getOptionsChain(symbol) {
+  const cached = optionsCache.get(symbol);
+
+  if (cached && Date.now() - cached.time < CACHE_MS) {
+    console.log(`${symbol} options from cache`);
+    return cached.data;
+  }
+
   const url =
     `https://api.massive.com/v3/snapshot/options/${symbol}?limit=250&apiKey=${API_KEY}`;
 
   const data = await apiGet(url);
+  const results = data.results || [];
 
-  return data.results || [];
+  optionsCache.set(symbol, {
+    time: Date.now(),
+    data: results
+  });
+
+  return results;
 }
 
 // =====================
@@ -342,7 +401,6 @@ async function getUserAccess(userId) {
 
   return data || null;
 }
-
 async function hasActiveAccess(userId) {
   if (ADMIN_IDS.includes(String(userId))) {
     return true;
@@ -533,33 +591,14 @@ async function closeTrade(id, reason, currentPrice) {
 
   if (error) throw error;
 }
+
 // =====================
 // Flow Logic
 // =====================
 
+// تم حل مشكلة DTE هنا
 function getDynamicDteRange(symbol, score, distance, spread, stockChange) {
-  const fastSymbols = ['SPY', 'QQQ', 'TSLA', 'NVDA', 'MSTR'];
-  const isFast = fastSymbols.includes(symbol);
-
-  if (
-    isFast &&
-    score >= 90 &&
-    distance <= 1.5 &&
-    spread <= 10 &&
-    Math.abs(stockChange) >= 1
-  ) {
-    return { min: 0, max: 3 };
-  }
-
-  if (score >= 82 && distance <= 3 && spread <= 12) {
-    return { min: 3, max: 7 };
-  }
-
-  if (score >= 75 && distance <= 5) {
-    return { min: 7, max: 14 };
-  }
-
-  return { min: 14, max: 30 };
+  return { min: 0, max: 60 };
 }
 
 function scoreContract(item, stock) {
@@ -576,12 +615,15 @@ function scoreContract(item, stock) {
   let score = 0;
 
   if (volume >= 1000) score += 15;
-  if (oi > 0 && volume > oi * 2) score += 20;
+  if (volume >= 300) score += 5;
+  if (oi > 0 && volume > oi * 1.5) score += 15;
   if (premium >= 100000) score += 15;
+  if (premium >= 50000) score += 5;
   if (delta >= 0.25 && delta <= 0.60) score += 15;
   if (gamma >= 0.02) score += 10;
   if (distance <= 3) score += 10;
   if (spread <= 12) score += 10;
+  if (spread <= 20) score += 5;
   if (isContractPriceOk(price)) score += 5;
 
   return {
@@ -597,8 +639,6 @@ function scoreContract(item, stock) {
     premium
   };
 }
-
-// فلتر وسط للاتجاه: كان 1.25 قاسي جداً
 function detectSide(chain, stock) {
   let callScore = 0;
   let putScore = 0;
@@ -639,7 +679,7 @@ function pickBestContract(symbol, chain, stock) {
 
   const candidates = [];
 
-  let rejected = {
+  const rejected = {
     dte: 0,
     score: 0,
     price: 0,
@@ -672,36 +712,32 @@ function pickBestContract(symbol, chain, stock) {
       continue;
     }
 
-    // فلتر وسط بدلاً من 75
-    if (metrics.score < 65) {
+    if (metrics.score < 60) {
       rejected.score++;
       continue;
     }
 
-    // فلتر سعر وسط بدلاً من 1.50 - 2.20
     if (!isContractPriceOk(metrics.price)) {
       rejected.price++;
       continue;
     }
 
-    // فلتر سبريد وسط بدلاً من 15
-    if (metrics.spread > 20) {
+    if (metrics.spread > 25) {
       rejected.spread++;
       continue;
     }
 
-    if (metrics.distance > 7) {
+    if (metrics.distance > 8) {
       rejected.distance++;
       continue;
     }
 
-    if (metrics.delta < 0.20 || metrics.delta > 0.70) {
+    if (metrics.delta < 0.18 || metrics.delta > 0.75) {
       rejected.delta++;
       continue;
     }
 
-    // فلتر حجم وسط بدلاً من 1000
-    if (metrics.volume < 300) {
+    if (metrics.volume < 250) {
       rejected.volume++;
       continue;
     }
@@ -722,7 +758,7 @@ function pickBestContract(symbol, chain, stock) {
   candidates.sort((a, b) => b.score - a.score);
 
   if (!candidates.length) {
-    console.log(`${symbol} skipped: no contract passed middle filters`);
+    console.log(`${symbol} skipped: no contract passed filters`);
     return null;
   }
 
@@ -735,7 +771,8 @@ function pickBestContract(symbol, chain, stock) {
     volume: candidates[0].volume,
     spread: candidates[0].spread,
     delta: candidates[0].delta,
-    distance: candidates[0].distance
+    distance: candidates[0].distance,
+    dte: candidates[0].dte
   });
 
   return candidates[0];
@@ -761,11 +798,11 @@ function buildLevels(side, stock) {
     target3: Number((stock.recentLow - buffer * 3).toFixed(2))
   };
 }
+
 // =====================
 // Messages
 // =====================
 
-// تم تعديلها: ترسل للإدمن دائماً + المشتركين الفعالين
 async function sendToActiveUsers(text) {
   const users = await getActiveUsers();
 
@@ -835,7 +872,6 @@ function buildEntryMessage(symbol, stock, best, levels) {
 تنبيه:
 هذه قراءة سيولة آلية وليست توصية شراء أو بيع.`;
 }
-
 function buildUpdateMessage(trade, currentContractPrice, stockPrice, pnl) {
   return `🔄 تحديث الصفقة
 
@@ -936,7 +972,10 @@ async function scanSymbol(symbol) {
 }
 
 async function scanNextSymbol() {
-  if (scannerRunning) return;
+  if (scannerRunning) {
+    console.log('Scanner already running - skipped');
+    return;
+  }
 
   scannerRunning = true;
 
@@ -951,14 +990,21 @@ async function scanNextSymbol() {
 
     console.log(`Scan completed: ${symbol}`);
   } catch (err) {
-    console.error(
-      `Scan error ${symbol}:`,
-      err.response?.data || err.message
-    );
+    if (err.message === 'MASSIVE_RATE_LIMIT') {
+      console.error(
+        `Scan stopped for ${symbol}: Massive API limit reached.`
+      );
+    } else {
+      console.error(
+        `Scan error ${symbol}:`,
+        err.response?.data || err.message
+      );
+    }
   } finally {
     scannerRunning = false;
   }
 }
+
 // =====================
 // Trade Updates
 // =====================
@@ -1017,8 +1063,7 @@ async function updateOpenTrades() {
         hitTp2 = stock.price <= Number(trade.stock_target_2);
         hitTp3 = stock.price <= Number(trade.stock_target_3);
       }
-
-      if (hitTp3) {
+            if (hitTp3) {
         await closeTrade(trade.id, 'TP3', contractPrice);
         await setCooldown(trade.symbol, 'تم تحقيق الهدف الثالث');
 
@@ -1145,10 +1190,16 @@ async function updateOpenTrades() {
         setTimeout(resolve, 500)
       );
     } catch (err) {
-      console.error(
-        `Update trade error ${trade.symbol}:`,
-        err.response?.data || err.message
-      );
+      if (err.message === 'MASSIVE_RATE_LIMIT') {
+        console.error(
+          `Update stopped for ${trade.symbol}: Massive API limit reached.`
+        );
+      } else {
+        console.error(
+          `Update trade error ${trade.symbol}:`,
+          err.response?.data || err.message
+        );
+      }
     }
   }
 }
@@ -1172,6 +1223,8 @@ ST-ABCD-1234
 الأوامر:
 /mysub حالة الاشتراك
 /myid معرفة رقم حسابك
+/status حالة البوت
+/scan فحص يدوي
 
 تنبيه:
 البوت أداة قراءة سيولة وليست توصية شراء أو بيع.`
@@ -1213,31 +1266,20 @@ ${active ? '✅ فعال' : '❌ منتهي'}
 ${formatDate(user.expires_at)}`
     );
   } catch (err) {
-    console.error(err);
-
     await bot.sendMessage(
       msg.chat.id,
       'حدث خطأ أثناء فحص الاشتراك.'
     );
   }
 });
+
 bot.onText(/\/create (\d+)/, async (msg, match) => {
   try {
     if (!isAdmin(msg)) {
-      return bot.sendMessage(
-        msg.chat.id,
-        '🚫 هذا الأمر للإدارة فقط'
-      );
+      return bot.sendMessage(msg.chat.id, '🚫 هذا الأمر للإدارة فقط');
     }
 
     const days = Number(match[1]);
-
-    if (!days || days <= 0) {
-      return bot.sendMessage(
-        msg.chat.id,
-        '⚠️ اكتب عدد أيام صحيح. مثال: /create 30'
-      );
-    }
 
     const result = await createActivationCode(days);
 
@@ -1252,13 +1294,9 @@ ${result.code}
 ${days} يوم
 
 📅 صلاحية الكود:
-${formatDate(result.expiresAt)}
-
-أرسل هذا الكود للمشترك ليقوم بتفعيله داخل البوت.`
+${formatDate(result.expiresAt)}`
     );
   } catch (err) {
-    console.error(err);
-
     await bot.sendMessage(
       msg.chat.id,
       `❌ فشل إنشاء الكود\n${err.message}`
@@ -1288,10 +1326,7 @@ bot.onText(/\/adduser (\d+) (\d+)/, async (msg, match) => {
     );
 
   if (error) {
-    return bot.sendMessage(
-      msg.chat.id,
-      `خطأ:\n${error.message}`
-    );
+    return bot.sendMessage(msg.chat.id, `خطأ:\n${error.message}`);
   }
 
   await bot.sendMessage(
@@ -1309,6 +1344,17 @@ ${days} يوم`
 bot.onText(/\/scan/, async (msg) => {
   if (!isAdmin(msg)) return;
 
+  const now = Date.now();
+
+  if (now - lastManualScanAt < MANUAL_SCAN_COOLDOWN_MS) {
+    return bot.sendMessage(
+      msg.chat.id,
+      '⏳ انتظر دقيقة بين كل فحص يدوي حتى لا نضغط على Massive API.'
+    );
+  }
+
+  lastManualScanAt = now;
+
   if (!isUsMarketTimeSaudi()) {
     return bot.sendMessage(
       msg.chat.id,
@@ -1316,16 +1362,13 @@ bot.onText(/\/scan/, async (msg) => {
     );
   }
 
-  await bot.sendMessage(
-    msg.chat.id,
-    '🔎 بدأ فحص سهم واحد الآن...'
-  );
+  await bot.sendMessage(msg.chat.id, '🔎 بدأ فحص سهم واحد الآن...');
 
   await scanNextSymbol();
 
   await bot.sendMessage(
     msg.chat.id,
-    '✅ انتهى الفحص. راجع Railway Logs لمعرفة سبب القبول أو الرفض.'
+    '✅ انتهى الفحص. راجع Railway Logs.'
   );
 });
 
@@ -1335,10 +1378,7 @@ bot.onText(/\/open/, async (msg) => {
   const trades = await getOpenTrades();
 
   if (!trades.length) {
-    return bot.sendMessage(
-      msg.chat.id,
-      'لا توجد صفقات مفتوحة.'
-    );
+    return bot.sendMessage(msg.chat.id, 'لا توجد صفقات مفتوحة.');
   }
 
   const text = trades.map(t =>
@@ -1355,16 +1395,14 @@ bot.onText(/\/open/, async (msg) => {
   await bot.sendMessage(msg.chat.id, text);
 });
 
-// أمر تشخيص سريع
 bot.onText(/\/status/, async (msg) => {
   if (!isAdmin(msg)) return;
 
-  try {
-    const users = await getActiveUsers();
-    const trades = await getOpenTrades();
+  const users = await getActiveUsers();
+  const trades = await getOpenTrades();
 
-    await bot.sendMessage(
-      msg.chat.id,
+  await bot.sendMessage(
+    msg.chat.id,
 `📊 حالة البوت
 
 ✅ البوت يعمل
@@ -1375,26 +1413,16 @@ ${users.length}
 📌 الصفقات المفتوحة:
 ${trades.length}
 
-🔎 السهم القادم للفحص:
+🔎 السهم القادم:
 ${WATCHLIST[scanIndex]}
 
-⏱ وقت السوق الآن:
+⏱ وقت السوق:
 ${isUsMarketTimeSaudi() ? 'مفتوح' : 'مغلق'}
 
-🧪 نسخة الفلاتر:
-وسط / Balanced`
-    );
-  } catch (err) {
-    await bot.sendMessage(
-      msg.chat.id,
-      `❌ خطأ في فحص الحالة:\n${err.message}`
-    );
-  }
+🧪 الفلاتر:
+Balanced + DTE 0-60 + API Cache`
+  );
 });
-
-// =====================
-// Activation Code Handler
-// =====================
 
 bot.on('message', async (msg) => {
   const text = String(msg.text || '').trim();
@@ -1409,14 +1437,8 @@ bot.on('message', async (msg) => {
 
   try {
     const result = await redeemCode(msg, text);
-
-    await bot.sendMessage(
-      msg.chat.id,
-      result.message
-    );
+    await bot.sendMessage(msg.chat.id, result.message);
   } catch (err) {
-    console.error(err);
-
     await bot.sendMessage(
       msg.chat.id,
       '❌ حدث خطأ أثناء تفعيل الكود.'
@@ -1446,4 +1468,4 @@ setInterval(() => {
   updateOpenTrades();
 }, UPDATE_INTERVAL_MS);
 
-console.log('🎯 ST Liquidity Hunter Bot Started - Balanced Filters Version');
+console.log('🎯 ST Liquidity Hunter Bot Started - Fixed Version');
