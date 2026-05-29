@@ -1147,7 +1147,50 @@ bot.on('message', async (msg) => {
 // Intervals
 // =====================
 
-setInterval(scanNextSymbol, SCAN_INTERVAL_MS);
-setInterval(updateOpenTrades, UPDATE_INTERVAL_MS);
+function isUsMarketTimeSaudi() {
+  const now = new Date();
+
+  const saTime = new Date(
+    now.toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })
+  );
+
+  const day = saTime.getDay(); // الأحد 0 - السبت 6
+  const hour = saTime.getHours();
+  const minute = saTime.getMinutes();
+
+  // إيقاف السبت والأحد
+  if (day === 0 || day === 6) return false;
+
+  const totalMinutes = hour * 60 + minute;
+
+  // وقت السوق الصيفي تقريباً: 4:30 م إلى 11:00 م السعودية
+  const summerOpen = 16 * 60 + 30;
+  const summerClose = 23 * 60;
+
+  // وقت السوق الشتوي تقريباً: 5:30 م إلى 12:00 ليلاً السعودية
+  const winterOpen = 17 * 60 + 30;
+  const winterClose = 24 * 60;
+
+  // نخليها مرنة وتشمل الفترتين
+  return totalMinutes >= summerOpen && totalMinutes <= winterClose;
+}
+
+setInterval(() => {
+  if (!isUsMarketTimeSaudi()) {
+    console.log('Market closed - scanner paused');
+    return;
+  }
+
+  scanNextSymbol();
+}, SCAN_INTERVAL_MS);
+
+setInterval(() => {
+  if (!isUsMarketTimeSaudi()) {
+    console.log('Market closed - trade updates paused');
+    return;
+  }
+
+  updateOpenTrades();
+}, UPDATE_INTERVAL_MS);
 
 console.log('🎯 ST Liquidity Hunter Bot Started');
