@@ -31,7 +31,7 @@ const WATCHLIST = [
   'QQQ'
 ];
 
-// تم رفعها من دقيقة إلى 3 دقائق لتخفيف ضغط Massive API
+// فحص سهم واحد كل 3 دقائق لتخفيف ضغط Massive API
 const SCAN_INTERVAL_MS = 3 * 60 * 1000;
 
 // تحديث الصفقات كل 5 دقائق
@@ -40,14 +40,14 @@ const UPDATE_INTERVAL_MS = 5 * 60 * 1000;
 const COOLDOWN_HOURS = 24;
 const UPDATE_BUCKET_PERCENT = 10;
 
-// منع تكرار /scan بسرعة
+// منع تكرار الفحص اليدوي بسرعة
 const MANUAL_SCAN_COOLDOWN_MS = 60 * 1000;
 let lastManualScanAt = 0;
 
 let scannerRunning = false;
 let scanIndex = 0;
 
-// كاش لتقليل طلبات Massive
+// كاش لتقليل استهلاك Massive
 const CACHE_MS = 90 * 1000;
 const stockCache = new Map();
 const optionsCache = new Map();
@@ -169,7 +169,6 @@ function isUsMarketTimeSaudi() {
 
   return totalMinutes >= open && totalMinutes <= close;
 }
-
 function getType(item) {
   return String(item?.details?.contract_type || '').toUpperCase();
 }
@@ -193,6 +192,7 @@ function getVolume(item) {
 function getOI(item) {
   return Number(item?.open_interest || 0);
 }
+
 function getDelta(item) {
   return Number(item?.greeks?.delta || 0);
 }
@@ -242,7 +242,7 @@ function distancePercent(strike, price) {
   );
 }
 
-// فلتر وسط
+// فلتر سعر متوازن
 function isContractPriceOk(price) {
   return price >= 1.00 && price <= 4.00;
 }
@@ -258,7 +258,7 @@ function isRateLimitError(err) {
 
   return (
     status === 429 ||
-    apiStatus === 'ERROR' && message.includes('exceeded')
+    (apiStatus === 'ERROR' && message.includes('exceeded'))
   );
 }
 
@@ -363,7 +363,6 @@ async function getOptionsChain(symbol) {
 
   return results;
 }
-
 // =====================
 // Subscription System
 // =====================
@@ -401,6 +400,7 @@ async function getUserAccess(userId) {
 
   return data || null;
 }
+
 async function hasActiveAccess(userId) {
   if (ADMIN_IDS.includes(String(userId))) {
     return true;
@@ -591,14 +591,13 @@ async function closeTrade(id, reason, currentPrice) {
 
   if (error) throw error;
 }
-
 // =====================
 // Flow Logic
 // =====================
 
-// تم حل مشكلة DTE هنا
+// منع 0DTE بعد المشكلة الأخيرة
 function getDynamicDteRange(symbol, score, distance, spread, stockChange) {
-  return { min: 0, max: 60 };
+  return { min: 1, max: 45 };
 }
 
 function scoreContract(item, stock) {
@@ -626,6 +625,8 @@ function scoreContract(item, stock) {
   if (spread <= 20) score += 5;
   if (isContractPriceOk(price)) score += 5;
 
+  score = Math.min(score, 100);
+
   return {
     score,
     volume,
@@ -639,6 +640,8 @@ function scoreContract(item, stock) {
     premium
   };
 }
+
+// فلتر اتجاه صارم: لا كول والسهم هابط، ولا بوت والسهم صاعد
 function detectSide(chain, stock) {
   let callScore = 0;
   let putScore = 0;
@@ -658,11 +661,11 @@ function detectSide(chain, stock) {
     putScore
   });
 
-  if (callScore > putScore * 1.15 && stock.change > -0.5) {
+  if (callScore > putScore * 1.15 && stock.change > 0.15) {
     return 'CALL';
   }
 
-  if (putScore > callScore * 1.15 && stock.change < 0.5) {
+  if (putScore > callScore * 1.15 && stock.change < -0.15) {
     return 'PUT';
   }
 
@@ -799,6 +802,27 @@ function buildLevels(side, stock) {
   };
 }
 
+function isValidLevels(side, stock, levels) {
+  if (side === 'CALL') {
+    return (
+      levels.stop < stock.price &&
+      levels.target1 > stock.price &&
+      levels.target2 > levels.target1 &&
+      levels.target3 > levels.target2
+    );
+  }
+
+  if (side === 'PUT') {
+    return (
+      levels.stop > stock.price &&
+      levels.target1 < stock.price &&
+      levels.target2 < levels.target1 &&
+      levels.target3 < levels.target2
+    );
+  }
+
+  return false;
+}
 // =====================
 // Messages
 // =====================
@@ -872,6 +896,7 @@ function buildEntryMessage(symbol, stock, best, levels) {
 تنبيه:
 هذه قراءة سيولة آلية وليست توصية شراء أو بيع.`;
 }
+
 function buildUpdateMessage(trade, currentContractPrice, stockPrice, pnl) {
   return `🔄 تحديث الصفقة
 
@@ -939,6 +964,16 @@ async function scanSymbol(symbol) {
   }
 
   const levels = buildLevels(best.side, stock);
+
+  if (!isValidLevels(best.side, stock, levels)) {
+    console.log(`${symbol} skipped: invalid levels`, {
+      side: best.side,
+      price: stock.price,
+      levels
+    });
+
+    return;
+  }
 
   const trade = {
     symbol,
@@ -1020,7 +1055,6 @@ async function getContractPriceFromChain(symbol, contractTicker) {
 
   return getMid(item);
 }
-
 async function updateOpenTrades() {
   const trades = await getOpenTrades();
 
@@ -1063,7 +1097,8 @@ async function updateOpenTrades() {
         hitTp2 = stock.price <= Number(trade.stock_target_2);
         hitTp3 = stock.price <= Number(trade.stock_target_3);
       }
-            if (hitTp3) {
+
+      if (hitTp3) {
         await closeTrade(trade.id, 'TP3', contractPrice);
         await setCooldown(trade.symbol, 'تم تحقيق الهدف الثالث');
 
@@ -1215,16 +1250,12 @@ bot.onText(/\/start/, async (msg) => {
 
 البوت يراقب الأسهم الأمريكية عالية السيولة ويبحث عن دخول سيولة قوي في عقود الأوبشن.
 
-لتفعيل اشتراكك:
-أرسل كود التفعيل مباشرة مثل:
-
-ST-ABCD-1234
-
 الأوامر:
 /mysub حالة الاشتراك
 /myid معرفة رقم حسابك
 /status حالة البوت
 /scan فحص يدوي
+/open الصفقات المفتوحة
 
 تنبيه:
 البوت أداة قراءة سيولة وليست توصية شراء أو بيع.`
@@ -1247,10 +1278,7 @@ bot.onText(/\/mysub/, async (msg) => {
     const user = await getUserAccess(msg.from.id);
 
     if (!user) {
-      return bot.sendMessage(
-        msg.chat.id,
-        '❌ لا يوجد اشتراك فعال.'
-      );
+      return bot.sendMessage(msg.chat.id, '❌ لا يوجد اشتراك فعال.');
     }
 
     const active =
@@ -1266,10 +1294,7 @@ ${active ? '✅ فعال' : '❌ منتهي'}
 ${formatDate(user.expires_at)}`
     );
   } catch (err) {
-    await bot.sendMessage(
-      msg.chat.id,
-      'حدث خطأ أثناء فحص الاشتراك.'
-    );
+    await bot.sendMessage(msg.chat.id, 'حدث خطأ أثناء فحص الاشتراك.');
   }
 });
 
@@ -1280,6 +1305,13 @@ bot.onText(/\/create (\d+)/, async (msg, match) => {
     }
 
     const days = Number(match[1]);
+
+    if (!days || days <= 0) {
+      return bot.sendMessage(
+        msg.chat.id,
+        '⚠️ اكتب عدد أيام صحيح. مثال: /create 30'
+      );
+    }
 
     const result = await createActivationCode(days);
 
@@ -1420,7 +1452,7 @@ ${WATCHLIST[scanIndex]}
 ${isUsMarketTimeSaudi() ? 'مفتوح' : 'مغلق'}
 
 🧪 الفلاتر:
-Balanced + DTE 0-60 + API Cache`
+Balanced + No 0DTE + Direction Filter + Valid Stop/Target`
   );
 });
 
@@ -1468,4 +1500,4 @@ setInterval(() => {
   updateOpenTrades();
 }, UPDATE_INTERVAL_MS);
 
-console.log('🎯 ST Liquidity Hunter Bot Started - Fixed Version');
+console.log('🎯 ST Liquidity Hunter Bot Started - Safe Direction Version');
