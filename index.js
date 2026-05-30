@@ -7,6 +7,7 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 });
 
 const API_KEY = process.env.MASSIVE_API_KEY;
+const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -31,23 +32,24 @@ const WATCHLIST = [
   'QQQ'
 ];
 
-// فحص سهم واحد كل 3 دقائق لتخفيف ضغط Massive API
 const SCAN_INTERVAL_MS = 3 * 60 * 1000;
-
-// تحديث الصفقات كل 5 دقائق
 const UPDATE_INTERVAL_MS = 5 * 60 * 1000;
 
 const COOLDOWN_HOURS = 24;
 const UPDATE_BUCKET_PERCENT = 10;
 
-// منع تكرار الفحص اليدوي بسرعة
+const MIN_DTE = 2;
+const MAX_DTE = 45;
+
+const MIN_RELATIVE_VOLUME = 1.15;
+const MIN_CONTRACT_SCORE = 75;
+
 const MANUAL_SCAN_COOLDOWN_MS = 60 * 1000;
 let lastManualScanAt = 0;
 
 let scannerRunning = false;
 let scanIndex = 0;
 
-// كاش لتقليل استهلاك Massive
 const CACHE_MS = 90 * 1000;
 const stockCache = new Map();
 const optionsCache = new Map();
@@ -109,12 +111,34 @@ function formatDate(v) {
 }
 
 function daysToExpiration(expiration) {
-  const today = new Date();
-  const exp = new Date(expiration);
+  if (!expiration) return -999;
 
-  return Math.ceil(
+  const now = new Date();
+
+  const today = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  );
+
+  const exp = new Date(`${expiration}T00:00:00`);
+
+  return Math.floor(
     (exp - today) / (1000 * 60 * 60 * 24)
   );
+}
+
+function calcEMA(values, length) {
+  if (!values.length) return 0;
+
+  const k = 2 / (length + 1);
+  let ema = values[0];
+
+  for (let i = 1; i < values.length; i++) {
+    ema = values[i] * k + ema * (1 - k);
+  }
+
+  return ema;
 }
 
 function isAdmin(msg) {
@@ -168,6 +192,24 @@ function isUsMarketTimeSaudi() {
   const close = 24 * 60;
 
   return totalMinutes >= open && totalMinutes <= close;
+}
+
+function isSafeEntryTimeSaudi() {
+  const now = new Date();
+
+  const saTime = new Date(
+    now.toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })
+  );
+
+  const hour = saTime.getHours();
+  const minute = saTime.getMinutes();
+  const totalMinutes = hour * 60 + minute;
+
+  const open = 16 * 60 + 30;
+  const firstSafeEntry = open + 15;
+  const close = 24 * 60;
+
+  return totalMinutes >= firstSafeEntry && totalMinutes <= close;
 }
 function getType(item) {
   return String(item?.details?.contract_type || '').toUpperCase();
@@ -242,7 +284,6 @@ function distancePercent(strike, price) {
   );
 }
 
-// فلتر سعر متوازن
 function isContractPriceOk(price) {
   return price >= 1.00 && price <= 4.00;
 }
@@ -263,7 +304,7 @@ function isRateLimitError(err) {
 }
 
 // =====================
-// Massive API
+// Massive + Finnhub API
 // =====================
 
 async function apiGet(url) {
@@ -287,6 +328,28 @@ async function apiGet(url) {
   }
 }
 
+async function getFinnhubPrice(symbol) {
+  if (!FINNHUB_API_KEY) return null;
+
+  try {
+    const url =
+      `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_API_KEY}`;
+
+    const res = await axios.get(url, {
+      timeout: 10000
+    });
+
+    const price = Number(res.data?.c || 0);
+
+    if (!price) return null;
+
+    return price;
+  } catch (err) {
+    console.error(`Finnhub price error ${symbol}:`, err.message);
+    return null;
+  }
+}
+
 async function getStockSnapshot(symbol) {
   const cached = stockCache.get(symbol);
 
@@ -303,7 +366,7 @@ async function getStockSnapshot(symbol) {
   const from = fromDate.toISOString().split('T')[0];
 
   const minuteUrl =
-    `https://api.massive.com/v2/aggs/ticker/${symbol}/range/1/minute/${from}/${to}?adjusted=true&sort=desc&limit=20&apiKey=${API_KEY}`;
+    `https://api.massive.com/v2/aggs/ticker/${symbol}/range/1/minute/${from}/${to}?adjusted=true&sort=desc&limit=120&apiKey=${API_KEY}`;
 
   const prevUrl =
     `https://api.massive.com/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${API_KEY}`;
@@ -311,19 +374,76 @@ async function getStockSnapshot(symbol) {
   const minuteData = await apiGet(minuteUrl);
   const prevData = await apiGet(prevUrl);
 
-  const bars = minuteData?.results || [];
-  const last = bars[0];
+  const bars = (minuteData?.results || []).reverse();
+  const last = bars[bars.length - 1];
   const prev = prevData?.results?.[0];
 
-  if (!last || !prev) return null;
+  if (!last || !prev || bars.length < 60) return null;
 
-  const price = last.c;
+  const finnhubPrice = await getFinnhubPrice(symbol);
+  const price = finnhubPrice || Number(last.c);
 
   const change =
     prev.c ? ((price - prev.c) / prev.c) * 100 : 0;
 
-  const recentHigh = Math.max(...bars.map(x => x.h));
-  const recentLow = Math.min(...bars.map(x => x.l));
+  const recentBars = bars.slice(-60);
+  const closes = recentBars.map(b => Number(b.c));
+
+  const recentHigh = Math.max(...recentBars.map(x => Number(x.h)));
+  const recentLow = Math.min(...recentBars.map(x => Number(x.l)));
+
+  const avgVolume =
+    recentBars.reduce((sum, b) => sum + Number(b.v || 0), 0) / recentBars.length;
+
+  const relativeVolume =
+    avgVolume ? Number((Number(last.v || 0) / avgVolume).toFixed(2)) : 0;
+
+  const vwapSum = recentBars.reduce((sum, b) => {
+    const typical = (Number(b.h) + Number(b.l) + Number(b.c)) / 3;
+    return sum + typical * Number(b.v || 0);
+  }, 0);
+
+  const volumeSum = recentBars.reduce((sum, b) => sum + Number(b.v || 0), 0);
+  const vwap = volumeSum ? vwapSum / volumeSum : price;
+
+  const trList = [];
+
+  for (let i = 1; i < recentBars.length; i++) {
+    const current = recentBars[i];
+    const previous = recentBars[i - 1];
+
+    const tr = Math.max(
+      Number(current.h) - Number(current.l),
+      Math.abs(Number(current.h) - Number(previous.c)),
+      Math.abs(Number(current.l) - Number(previous.c))
+    );
+
+    trList.push(tr);
+  }
+
+  const atr = trList.length
+    ? trList.reduce((a, b) => a + b, 0) / trList.length
+    : price * 0.01;
+
+  const ema20 = calcEMA(closes, 20);
+  const ema50 = calcEMA(closes, 50);
+
+  const structureBars = recentBars.slice(-20, -1);
+
+  const recentBreakoutHigh = Math.max(...structureBars.map(b => Number(b.h)));
+  const recentBreakdownLow = Math.min(...structureBars.map(b => Number(b.l)));
+
+  const lastClose = Number(last.c);
+
+  const bullishBreakout =
+    lastClose > recentBreakoutHigh &&
+    price > vwap &&
+    ema20 > ema50;
+
+  const bearishBreakdown =
+    lastClose < recentBreakdownLow &&
+    price < vwap &&
+    ema20 < ema50;
 
   const data = {
     symbol,
@@ -331,7 +451,17 @@ async function getStockSnapshot(symbol) {
     change,
     recentHigh,
     recentLow,
-    volume: last.v
+    volume: Number(last.v || 0),
+    avgVolume,
+    relativeVolume,
+    vwap,
+    atr,
+    ema20,
+    ema50,
+    recentBreakoutHigh,
+    recentBreakdownLow,
+    bullishBreakout,
+    bearishBreakdown
   };
 
   stockCache.set(symbol, {
@@ -591,13 +721,16 @@ async function closeTrade(id, reason, currentPrice) {
 
   if (error) throw error;
 }
+
 // =====================
 // Flow Logic
 // =====================
 
-// منع 0DTE بعد المشكلة الأخيرة
 function getDynamicDteRange(symbol, score, distance, spread, stockChange) {
-  return { min: 1, max: 45 };
+  return {
+    min: MIN_DTE,
+    max: MAX_DTE
+  };
 }
 
 function scoreContract(item, stock) {
@@ -641,7 +774,6 @@ function scoreContract(item, stock) {
   };
 }
 
-// فلتر اتجاه صارم: لا كول والسهم هابط، ولا بوت والسهم صاعد
 function detectSide(chain, stock) {
   let callScore = 0;
   let putScore = 0;
@@ -658,25 +790,42 @@ function detectSide(chain, stock) {
     symbol: stock.symbol,
     change: stock.change,
     callScore,
-    putScore
+    putScore,
+    price: stock.price,
+    vwap: stock.vwap,
+    ema20: stock.ema20,
+    ema50: stock.ema50,
+    bullishBreakout: stock.bullishBreakout,
+    bearishBreakdown: stock.bearishBreakdown
   });
 
-  if (callScore > putScore * 1.15 && stock.change > 0.15) {
+  if (
+    callScore > putScore * 1.15 &&
+    stock.change > 0.15 &&
+    stock.price > stock.vwap &&
+    stock.ema20 > stock.ema50 &&
+    stock.bullishBreakout
+  ) {
     return 'CALL';
   }
 
-  if (putScore > callScore * 1.15 && stock.change < -0.15) {
+  if (
+    putScore > callScore * 1.15 &&
+    stock.change < -0.15 &&
+    stock.price < stock.vwap &&
+    stock.ema20 < stock.ema50 &&
+    stock.bearishBreakdown
+  ) {
     return 'PUT';
   }
 
   return null;
 }
-
 function pickBestContract(symbol, chain, stock) {
   const side = detectSide(chain, stock);
 
   if (!side) {
-    console.log(`${symbol} skipped: no clear side`);
+    console.log(`${symbol} skipped: no clear side or no technical timing`);
     return null;
   }
 
@@ -690,14 +839,23 @@ function pickBestContract(symbol, chain, stock) {
     distance: 0,
     delta: 0,
     volume: 0,
+    noExpiration: 0,
+    wrongSide: 0,
     passed: 0
   };
 
   for (const item of chain) {
-    if (getType(item) !== side) continue;
+    if (getType(item) !== side) {
+      rejected.wrongSide++;
+      continue;
+    }
 
     const exp = getExpiration(item);
-    if (!exp) continue;
+
+    if (!exp) {
+      rejected.noExpiration++;
+      continue;
+    }
 
     const metrics = scoreContract(item, stock);
     const dte = daysToExpiration(exp);
@@ -715,7 +873,7 @@ function pickBestContract(symbol, chain, stock) {
       continue;
     }
 
-    if (metrics.score < 60) {
+    if (metrics.score < MIN_CONTRACT_SCORE) {
       rejected.score++;
       continue;
     }
@@ -758,7 +916,21 @@ function pickBestContract(symbol, chain, stock) {
 
   console.log(`${symbol} filter report:`, rejected);
 
-  candidates.sort((a, b) => b.score - a.score);
+  candidates.sort((a, b) => {
+    const rankA =
+      a.score +
+      Math.max(0, 20 - a.spread) +
+      Math.max(0, 10 - a.distance) +
+      Math.min(a.premium / 10000, 20);
+
+    const rankB =
+      b.score +
+      Math.max(0, 20 - b.spread) +
+      Math.max(0, 10 - b.distance) +
+      Math.min(b.premium / 10000, 20);
+
+    return rankB - rankA;
+  });
 
   if (!candidates.length) {
     console.log(`${symbol} skipped: no contract passed filters`);
@@ -782,23 +954,22 @@ function pickBestContract(symbol, chain, stock) {
 }
 
 function buildLevels(side, stock) {
-  const range = Math.abs(stock.recentHigh - stock.recentLow);
-  const buffer = Math.max(range * 0.25, stock.price * 0.006);
+  const atr = Number(stock.atr || stock.price * 0.01);
 
   if (side === 'CALL') {
     return {
-      stop: Number((stock.recentLow - buffer).toFixed(2)),
-      target1: Number((stock.recentHigh + buffer).toFixed(2)),
-      target2: Number((stock.recentHigh + buffer * 2).toFixed(2)),
-      target3: Number((stock.recentHigh + buffer * 3).toFixed(2))
+      stop: Number((stock.price - atr * 1.2).toFixed(2)),
+      target1: Number((stock.price + atr * 1.0).toFixed(2)),
+      target2: Number((stock.price + atr * 1.8).toFixed(2)),
+      target3: Number((stock.price + atr * 2.6).toFixed(2))
     };
   }
 
   return {
-    stop: Number((stock.recentHigh + buffer).toFixed(2)),
-    target1: Number((stock.recentLow - buffer).toFixed(2)),
-    target2: Number((stock.recentLow - buffer * 2).toFixed(2)),
-    target3: Number((stock.recentLow - buffer * 3).toFixed(2))
+    stop: Number((stock.price + atr * 1.2).toFixed(2)),
+    target1: Number((stock.price - atr * 1.0).toFixed(2)),
+    target2: Number((stock.price - atr * 1.8).toFixed(2)),
+    target3: Number((stock.price - atr * 2.6).toFixed(2))
   };
 }
 
@@ -823,6 +994,7 @@ function isValidLevels(side, stock, levels) {
 
   return false;
 }
+
 // =====================
 // Messages
 // =====================
@@ -865,7 +1037,7 @@ async function sendToActiveUsers(text) {
 }
 
 function buildEntryMessage(symbol, stock, best, levels) {
-  return `🚨 تم اكتشاف دخول سيولة قوية
+  return `🚨 تم اكتشاف صفقة سيولة + توقيت دخول
 
 📊 السهم: ${symbol}
 📈 النوع: ${sideArabic(best.side)}
@@ -875,7 +1047,13 @@ function buildEntryMessage(symbol, stock, best, levels) {
 ⏳ المدة: ${best.dte} يوم
 
 💰 سعر العقد: ${fmtPrice(best.price)}
-📊 درجة الفرصة: ${best.score} / 100
+📊 درجة العقد: ${best.score} / 100
+
+📍 سعر السهم: ${fmtPrice(stock.price)}
+📊 VWAP: ${fmtPrice(stock.vwap)}
+📈 EMA20: ${fmtPrice(stock.ema20)}
+📉 EMA50: ${fmtPrice(stock.ema50)}
+🔥 RVOL: ${fmtPrice(stock.relativeVolume)}
 
 🛑 وقف السهم: ${fmtPrice(levels.stop)}
 🎯 الهدف الأول: ${fmtPrice(levels.target1)}
@@ -884,6 +1062,8 @@ function buildEntryMessage(symbol, stock, best, levels) {
 
 ━━━━━━━━━━━━━━
 🔥 سبب الالتقاط:
+• سيولة ${sideArabic(best.side)} أقوى
+• توقيت دخول فني مؤكد
 • حجم العقد: ${fmt(best.volume)}
 • العقود المفتوحة: ${fmt(best.oi)}
 • قيمة التداول التقريبية: $${fmt(best.premium)}
@@ -894,7 +1074,7 @@ function buildEntryMessage(symbol, stock, best, levels) {
 
 ━━━━━━━━━━━━━━
 تنبيه:
-هذه قراءة سيولة آلية وليست توصية شراء أو بيع.`;
+هذه قراءة آلية وليست توصية شراء أو بيع.`;
 }
 
 function buildUpdateMessage(trade, currentContractPrice, stockPrice, pnl) {
@@ -914,13 +1094,17 @@ function buildUpdateMessage(trade, currentContractPrice, stockPrice, pnl) {
 🎯 الهدف الثاني: ${fmtPrice(trade.stock_target_2)}
 🎯 الهدف الثالث: ${fmtPrice(trade.stock_target_3)}`;
 }
-
 // =====================
 // Scanner
 // =====================
 
 async function scanSymbol(symbol) {
   console.log(`--- Checking ${symbol} ---`);
+
+  if (!isSafeEntryTimeSaudi()) {
+    console.log(`${symbol} skipped: first 15 minutes blocked`);
+    return;
+  }
 
   if (await hasOpenTrade(symbol)) {
     console.log(`${symbol} skipped: open trade exists`);
@@ -944,8 +1128,26 @@ async function scanSymbol(symbol) {
     change: stock.change,
     recentHigh: stock.recentHigh,
     recentLow: stock.recentLow,
-    volume: stock.volume
+    volume: stock.volume,
+    avgVolume: stock.avgVolume,
+    relativeVolume: stock.relativeVolume,
+    vwap: stock.vwap,
+    atr: stock.atr,
+    ema20: stock.ema20,
+    ema50: stock.ema50,
+    bullishBreakout: stock.bullishBreakout,
+    bearishBreakdown: stock.bearishBreakdown
   });
+
+  if (stock.relativeVolume < MIN_RELATIVE_VOLUME) {
+    console.log(`${symbol} skipped: weak stock volume`, {
+      volume: stock.volume,
+      avgVolume: stock.avgVolume,
+      relativeVolume: stock.relativeVolume,
+      minRequired: MIN_RELATIVE_VOLUME
+    });
+    return;
+  }
 
   const chain = await getOptionsChain(symbol);
 
@@ -1044,7 +1246,7 @@ async function scanNextSymbol() {
 // Trade Updates
 // =====================
 
-async function getContractPriceFromChain(symbol, contractTicker) {
+async function getContractSnapshotFromChain(symbol, contractTicker) {
   const chain = await getOptionsChain(symbol);
 
   const item = chain.find(x =>
@@ -1053,8 +1255,27 @@ async function getContractPriceFromChain(symbol, contractTicker) {
 
   if (!item) return null;
 
-  return getMid(item);
+  return {
+    price: getMid(item),
+    spread: spreadPercent(item),
+    volume: getVolume(item),
+    oi: getOI(item),
+    delta: Math.abs(getDelta(item)),
+    gamma: getGamma(item)
+  };
 }
+
+function isContractRiskBroken(entryPrice, currentPrice, spread) {
+  if (!entryPrice || !currentPrice) return false;
+
+  const pnl = ((currentPrice - entryPrice) / entryPrice) * 100;
+
+  if (pnl <= -35) return true;
+  if (spread >= 35) return true;
+
+  return false;
+}
+
 async function updateOpenTrades() {
   const trades = await getOpenTrades();
 
@@ -1063,18 +1284,44 @@ async function updateOpenTrades() {
       const stock = await getStockSnapshot(trade.symbol);
       if (!stock) continue;
 
-      const contractPrice = await getContractPriceFromChain(
+      const contractSnapshot = await getContractSnapshotFromChain(
         trade.symbol,
         trade.contract_ticker
       );
 
-      if (!contractPrice) continue;
+      if (!contractSnapshot || !contractSnapshot.price) continue;
+
+      const contractPrice = contractSnapshot.price;
+      const currentSpread = contractSnapshot.spread;
 
       const entryPrice = Number(trade.entry_contract_price);
 
       const pnl = entryPrice
         ? ((contractPrice - entryPrice) / entryPrice) * 100
         : 0;
+
+      if (isContractRiskBroken(entryPrice, contractPrice, currentSpread)) {
+        await closeTrade(trade.id, 'CONTRACT_RISK', contractPrice);
+        await setCooldown(trade.symbol, 'ضعف العقد أو توسع السبريد');
+
+        await sendToActiveUsers(
+`⚠️ تم إغلاق الصفقة بسبب ضعف العقد
+
+📊 السهم: ${trade.symbol}
+📈 النوع: ${sideArabic(trade.side)}
+
+💰 الدخول: ${fmtPrice(entryPrice)}
+💰 الخروج: ${fmtPrice(contractPrice)}
+
+📉 النتيجة النهائية: ${fmtPercent(pnl)}
+📊 السبريد الحالي: ${fmtPercent(currentSpread)}
+
+سبب الإغلاق:
+ضعف سعر العقد أو توسع السبريد لحماية رأس المال.`
+        );
+
+        continue;
+      }
 
       const currentBucket = Math.trunc(pnl / UPDATE_BUCKET_PERCENT);
       const lastBucket = Number(trade.last_update_bucket || 0);
@@ -1238,7 +1485,6 @@ async function updateOpenTrades() {
     }
   }
 }
-
 // =====================
 // Bot Commands
 // =====================
@@ -1248,7 +1494,8 @@ bot.onText(/\/start/, async (msg) => {
     msg.chat.id,
 `🎯 أهلاً بك في ST صائد السيولة
 
-البوت يراقب الأسهم الأمريكية عالية السيولة ويبحث عن دخول سيولة قوي في عقود الأوبشن.
+البوت يراقب الأسهم الأمريكية عالية السيولة ويبحث عن صفقات مبنية على:
+السيولة + توقيت الدخول الفني.
 
 الأوامر:
 /mysub حالة الاشتراك
@@ -1258,7 +1505,7 @@ bot.onText(/\/start/, async (msg) => {
 /open الصفقات المفتوحة
 
 تنبيه:
-البوت أداة قراءة سيولة وليست توصية شراء أو بيع.`
+البوت أداة قراءة آلية وليست توصية شراء أو بيع.`
   );
 });
 
@@ -1452,7 +1699,21 @@ ${WATCHLIST[scanIndex]}
 ${isUsMarketTimeSaudi() ? 'مفتوح' : 'مغلق'}
 
 🧪 الفلاتر:
-Balanced + No 0DTE + Direction Filter + Valid Stop/Target`
+Finnhub Price + Massive Options
+No 0DTE / No 1DTE
+VWAP + ATR + RVOL
+EMA20 / EMA50
+Breakout / Breakdown Timing
+Contract Risk Protection
+
+📅 مدة العقود:
+من ${MIN_DTE} يوم إلى ${MAX_DTE} يوم
+
+📊 أقل RVOL:
+${MIN_RELATIVE_VOLUME}
+
+📊 أقل Score للعقد:
+${MIN_CONTRACT_SCORE}`
   );
 });
 
@@ -1500,4 +1761,4 @@ setInterval(() => {
   updateOpenTrades();
 }, UPDATE_INTERVAL_MS);
 
-console.log('🎯 ST Liquidity Hunter Bot Started - Safe Direction Version');
+console.log('🎯 ST Liquidity Hunter Bot Started - Liquidity + Entry Timing Version');
