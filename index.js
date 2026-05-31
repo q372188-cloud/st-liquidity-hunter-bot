@@ -74,6 +74,14 @@ function fmtPrice(n) {
   return Number(n).toFixed(2);
 }
 
+function fmtPriceSafe(n, fallback = 'تحقق حسب حركة العقد') {
+  if (n === undefined || n === null || isNaN(Number(n))) {
+    return fallback;
+  }
+
+  return Number(n).toFixed(2);
+}
+
 function fmtPercent(n) {
   if (n === undefined || n === null || isNaN(Number(n))) {
     return 'غير متوفر';
@@ -211,6 +219,7 @@ function isSafeEntryTimeSaudi() {
 
   return totalMinutes >= firstSafeEntry && totalMinutes <= close;
 }
+
 function getType(item) {
   return String(item?.details?.contract_type || '').toUpperCase();
 }
@@ -302,7 +311,6 @@ function isRateLimitError(err) {
     (apiStatus === 'ERROR' && message.includes('exceeded'))
   );
 }
-
 // =====================
 // Massive + Finnhub API
 // =====================
@@ -493,6 +501,7 @@ async function getOptionsChain(symbol) {
 
   return results;
 }
+
 // =====================
 // Subscription System
 // =====================
@@ -625,7 +634,6 @@ ${formatDate(userExpiresAt)}
 سيصلك تنبيه تلقائي عند اكتشاف سيولة قوية.`
   };
 }
-
 // =====================
 // Supabase Trades
 // =====================
@@ -821,6 +829,7 @@ function detectSide(chain, stock) {
 
   return null;
 }
+
 function pickBestContract(symbol, chain, stock) {
   const side = detectSide(chain, stock);
 
@@ -994,7 +1003,6 @@ function isValidLevels(side, stock, levels) {
 
   return false;
 }
-
 // =====================
 // Messages
 // =====================
@@ -1058,7 +1066,7 @@ function buildEntryMessage(symbol, stock, best, levels) {
 🛑 وقف السهم: ${fmtPrice(levels.stop)}
 🎯 الهدف الأول: ${fmtPrice(levels.target1)}
 🎯 الهدف الثاني: ${fmtPrice(levels.target2)}
-🎯 الهدف الثالث: ${fmtPrice(levels.target3)}
+🎯 الهدف الثالث: ${fmtPriceSafe(levels.target3)}
 
 ━━━━━━━━━━━━━━
 🔥 سبب الالتقاط:
@@ -1092,8 +1100,9 @@ function buildUpdateMessage(trade, currentContractPrice, stockPrice, pnl) {
 🛑 وقف السهم: ${fmtPrice(trade.stock_stop_price)}
 🎯 الهدف الأول: ${fmtPrice(trade.stock_target_1)}
 🎯 الهدف الثاني: ${fmtPrice(trade.stock_target_2)}
-🎯 الهدف الثالث: ${fmtPrice(trade.stock_target_3)}`;
+🎯 الهدف الثالث: ${fmtPriceSafe(trade.stock_target_3)}`;
 }
+
 // =====================
 // Scanner
 // =====================
@@ -1360,7 +1369,7 @@ async function updateOpenTrades() {
 
 📈 النتيجة النهائية: ${fmtPercent(pnl)}
 
-🎯 هدف السهم الثالث: ${fmtPrice(trade.stock_target_3)}`
+🎯 هدف السهم الثالث: ${fmtPriceSafe(trade.stock_target_3)}`
         );
 
         continue;
@@ -1668,7 +1677,7 @@ bot.onText(/\/open/, async (msg) => {
 🛑 الوقف: ${fmtPrice(t.stock_stop_price)}
 🎯 الهدف الأول: ${fmtPrice(t.stock_target_1)}
 🎯 الهدف الثاني: ${fmtPrice(t.stock_target_2)}
-🎯 الهدف الثالث: ${fmtPrice(t.stock_target_3)}`
+🎯 الهدف الثالث: ${fmtPriceSafe(t.stock_target_3)}`
   ).join('\n\n');
 
   await bot.sendMessage(msg.chat.id, text);
