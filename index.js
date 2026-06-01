@@ -1,9 +1,17 @@
+require('dotenv').config();
+
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
-  polling: true
+  polling: {
+    interval: 300,
+    autoStart: true,
+    params: {
+      timeout: 10
+    }
+  }
 });
 
 const API_KEY = process.env.MASSIVE_API_KEY;
@@ -48,6 +56,7 @@ const MANUAL_SCAN_COOLDOWN_MS = 60 * 1000;
 let lastManualScanAt = 0;
 
 let scannerRunning = false;
+let updaterRunning = false;
 let scanIndex = 0;
 
 const CACHE_MS = 90 * 1000;
@@ -110,6 +119,7 @@ function formatDate(v) {
   if (!v) return 'غير متوفر';
 
   return new Date(v).toLocaleString('ar-SA', {
+    timeZone: 'Asia/Riyadh',
     year: 'numeric',
     month: 'long',
     day: 'numeric',
@@ -134,6 +144,22 @@ function daysToExpiration(expiration) {
   return Math.floor(
     (exp - today) / (1000 * 60 * 60 * 24)
   );
+}
+
+function isExpiredExpiration(expiration) {
+  if (!expiration) return false;
+
+  const now = new Date();
+
+  const today = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  );
+
+  const expDate = new Date(`${expiration}T00:00:00`);
+
+  return expDate < today;
 }
 
 function calcEMA(values, length) {
@@ -180,7 +206,6 @@ function generateCode() {
 
   return code;
 }
-
 function isUsMarketTimeSaudi() {
   const now = new Date();
 
@@ -311,6 +336,7 @@ function isRateLimitError(err) {
     (apiStatus === 'ERROR' && message.includes('exceeded'))
   );
 }
+
 // =====================
 // Massive + Finnhub API
 // =====================
@@ -432,8 +458,7 @@ async function getStockSnapshot(symbol) {
   const atr = trList.length
     ? trList.reduce((a, b) => a + b, 0) / trList.length
     : price * 0.01;
-
-  const ema20 = calcEMA(closes, 20);
+    const ema20 = calcEMA(closes, 20);
   const ema50 = calcEMA(closes, 50);
 
   const structureBars = recentBars.slice(-20, -1);
@@ -480,10 +505,14 @@ async function getStockSnapshot(symbol) {
   return data;
 }
 
-async function getOptionsChain(symbol) {
+async function getOptionsChain(symbol, forceFresh = false) {
   const cached = optionsCache.get(symbol);
 
-  if (cached && Date.now() - cached.time < CACHE_MS) {
+  if (
+    !forceFresh &&
+    cached &&
+    Date.now() - cached.time < CACHE_MS
+  ) {
     console.log(`${symbol} options from cache`);
     return cached.data;
   }
@@ -634,6 +663,7 @@ ${formatDate(userExpiresAt)}
 سيصلك تنبيه تلقائي عند اكتشاف سيولة قوية.`
   };
 }
+
 // =====================
 // Supabase Trades
 // =====================
@@ -729,7 +759,6 @@ async function closeTrade(id, reason, currentPrice) {
 
   if (error) throw error;
 }
-
 // =====================
 // Flow Logic
 // =====================
@@ -1103,6 +1132,22 @@ function buildUpdateMessage(trade, currentContractPrice, stockPrice, pnl) {
 🎯 الهدف الثالث: ${fmtPriceSafe(trade.stock_target_3)}`;
 }
 
+function buildExpiredMessage(trade) {
+  return `⚠️ تم إغلاق الصفقة تلقائياً لانتهاء العقد
+
+📊 السهم: ${trade.symbol}
+📈 النوع: ${sideArabic(trade.side)}
+
+🎯 السترايك: ${trade.strike}
+📅 الانتهاء: ${trade.expiration}
+
+💰 سعر الدخول: ${fmtPrice(trade.entry_contract_price)}
+💰 آخر سعر محفوظ: ${fmtPrice(trade.current_contract_price)}
+
+سبب الإغلاق:
+انتهى تاريخ العقد ولم يعد مناسباً للتحديث.`;
+}
+
 // =====================
 // Scanner
 // =====================
@@ -1250,17 +1295,26 @@ async function scanNextSymbol() {
     scannerRunning = false;
   }
 }
-
 // =====================
 // Trade Updates
 // =====================
 
 async function getContractSnapshotFromChain(symbol, contractTicker) {
-  const chain = await getOptionsChain(symbol);
+  let chain = await getOptionsChain(symbol);
 
-  const item = chain.find(x =>
+  let item = chain.find(x =>
     getContractTicker(x) === contractTicker
   );
+
+  if (!item) {
+    console.log(`${symbol} contract not found in cached chain. Trying fresh chain...`);
+
+    chain = await getOptionsChain(symbol, true);
+
+    item = chain.find(x =>
+      getContractTicker(x) === contractTicker
+    );
+  }
 
   if (!item) return null;
 
@@ -1286,34 +1340,81 @@ function isContractRiskBroken(entryPrice, currentPrice, spread) {
 }
 
 async function updateOpenTrades() {
-  const trades = await getOpenTrades();
+  if (updaterRunning) {
+    console.log('Updater already running - skipped');
+    return;
+  }
 
-  for (const trade of trades) {
-    try {
-      const stock = await getStockSnapshot(trade.symbol);
-      if (!stock) continue;
+  updaterRunning = true;
 
-      const contractSnapshot = await getContractSnapshotFromChain(
-        trade.symbol,
-        trade.contract_ticker
-      );
+  try {
+    const trades = await getOpenTrades();
 
-      if (!contractSnapshot || !contractSnapshot.price) continue;
+    for (const trade of trades) {
+      try {
+        if (isExpiredExpiration(trade.expiration)) {
+          const lastKnownPrice = Number(
+            trade.current_contract_price ||
+            trade.entry_contract_price ||
+            0
+          );
 
-      const contractPrice = contractSnapshot.price;
-      const currentSpread = contractSnapshot.spread;
+          await closeTrade(trade.id, 'EXPIRED', lastKnownPrice);
+          await setCooldown(trade.symbol, 'انتهى تاريخ العقد');
 
-      const entryPrice = Number(trade.entry_contract_price);
+          await sendToActiveUsers(
+            buildExpiredMessage(trade)
+          );
 
-      const pnl = entryPrice
-        ? ((contractPrice - entryPrice) / entryPrice) * 100
-        : 0;
+          console.log(`${trade.symbol} trade closed: expired contract`);
+          continue;
+        }
 
-      if (isContractRiskBroken(entryPrice, contractPrice, currentSpread)) {
-        await closeTrade(trade.id, 'CONTRACT_RISK', contractPrice);
-        await setCooldown(trade.symbol, 'ضعف العقد أو توسع السبريد');
+        const stock = await getStockSnapshot(trade.symbol);
+        if (!stock) {
+          console.log(`${trade.symbol} update skipped: no stock snapshot`);
+          continue;
+        }
 
-        await sendToActiveUsers(
+        const contractSnapshot = await getContractSnapshotFromChain(
+          trade.symbol,
+          trade.contract_ticker
+        );
+
+        if (!contractSnapshot || !contractSnapshot.price) {
+          console.log(`${trade.symbol} update skipped: contract snapshot not found`, {
+            contractTicker: trade.contract_ticker,
+            expiration: trade.expiration
+          });
+
+          await supabase
+            .from('active_trades')
+            .update({
+              current_contract_price: Number(
+                trade.current_contract_price ||
+                trade.entry_contract_price ||
+                0
+              )
+            })
+            .eq('id', trade.id);
+
+          continue;
+        }
+
+        const contractPrice = contractSnapshot.price;
+        const currentSpread = contractSnapshot.spread;
+
+        const entryPrice = Number(trade.entry_contract_price);
+
+        const pnl = entryPrice
+          ? ((contractPrice - entryPrice) / entryPrice) * 100
+          : 0;
+
+        if (isContractRiskBroken(entryPrice, contractPrice, currentSpread)) {
+          await closeTrade(trade.id, 'CONTRACT_RISK', contractPrice);
+          await setCooldown(trade.symbol, 'ضعف العقد أو توسع السبريد');
+
+          await sendToActiveUsers(
 `⚠️ تم إغلاق الصفقة بسبب ضعف العقد
 
 📊 السهم: ${trade.symbol}
@@ -1327,38 +1428,38 @@ async function updateOpenTrades() {
 
 سبب الإغلاق:
 ضعف سعر العقد أو توسع السبريد لحماية رأس المال.`
-        );
+          );
 
-        continue;
-      }
+          continue;
+        }
 
-      const currentBucket = Math.trunc(pnl / UPDATE_BUCKET_PERCENT);
-      const lastBucket = Number(trade.last_update_bucket || 0);
+        const currentBucket = Math.trunc(pnl / UPDATE_BUCKET_PERCENT);
+        const lastBucket = Number(trade.last_update_bucket || 0);
 
-      let hitStop = false;
-      let hitTp1 = false;
-      let hitTp2 = false;
-      let hitTp3 = false;
+        let hitStop = false;
+        let hitTp1 = false;
+        let hitTp2 = false;
+        let hitTp3 = false;
 
-      if (trade.side === 'CALL') {
-        hitStop = stock.price <= Number(trade.stock_stop_price);
-        hitTp1 = stock.price >= Number(trade.stock_target_1);
-        hitTp2 = stock.price >= Number(trade.stock_target_2);
-        hitTp3 = stock.price >= Number(trade.stock_target_3);
-      }
+        if (trade.side === 'CALL') {
+          hitStop = stock.price <= Number(trade.stock_stop_price);
+          hitTp1 = stock.price >= Number(trade.stock_target_1);
+          hitTp2 = stock.price >= Number(trade.stock_target_2);
+          hitTp3 = stock.price >= Number(trade.stock_target_3);
+        }
 
-      if (trade.side === 'PUT') {
-        hitStop = stock.price >= Number(trade.stock_stop_price);
-        hitTp1 = stock.price <= Number(trade.stock_target_1);
-        hitTp2 = stock.price <= Number(trade.stock_target_2);
-        hitTp3 = stock.price <= Number(trade.stock_target_3);
-      }
+        if (trade.side === 'PUT') {
+          hitStop = stock.price >= Number(trade.stock_stop_price);
+          hitTp1 = stock.price <= Number(trade.stock_target_1);
+          hitTp2 = stock.price <= Number(trade.stock_target_2);
+          hitTp3 = stock.price <= Number(trade.stock_target_3);
+        }
 
-      if (hitTp3) {
-        await closeTrade(trade.id, 'TP3', contractPrice);
-        await setCooldown(trade.symbol, 'تم تحقيق الهدف الثالث');
+        if (hitTp3) {
+          await closeTrade(trade.id, 'TP3', contractPrice);
+          await setCooldown(trade.symbol, 'تم تحقيق الهدف الثالث');
 
-        await sendToActiveUsers(
+          await sendToActiveUsers(
 `✅ تم إغلاق الصفقة على الهدف الثالث
 
 📊 السهم: ${trade.symbol}
@@ -1370,16 +1471,16 @@ async function updateOpenTrades() {
 📈 النتيجة النهائية: ${fmtPercent(pnl)}
 
 🎯 هدف السهم الثالث: ${fmtPriceSafe(trade.stock_target_3)}`
-        );
+          );
 
-        continue;
-      }
+          continue;
+        }
 
-      if (hitStop) {
-        await closeTrade(trade.id, 'SL', contractPrice);
-        await setCooldown(trade.symbol, 'تم ضرب الوقف');
+        if (hitStop) {
+          await closeTrade(trade.id, 'SL', contractPrice);
+          await setCooldown(trade.symbol, 'تم ضرب الوقف');
 
-        await sendToActiveUsers(
+          await sendToActiveUsers(
 `🛑 تم إغلاق الصفقة على وقف الخسارة
 
 📊 السهم: ${trade.symbol}
@@ -1391,23 +1492,23 @@ async function updateOpenTrades() {
 📉 النتيجة النهائية: ${fmtPercent(pnl)}
 
 🛑 وقف السهم: ${fmtPrice(trade.stock_stop_price)}`
-        );
+          );
 
-        continue;
-      }
+          continue;
+        }
 
-      if (hitTp2 && !trade.tp2_hit) {
-        await supabase
-          .from('active_trades')
-          .update({
-            tp1_hit: true,
-            tp2_hit: true,
-            current_contract_price: contractPrice,
-            last_update_bucket: currentBucket
-          })
-          .eq('id', trade.id);
+        if (hitTp2 && !trade.tp2_hit) {
+          await supabase
+            .from('active_trades')
+            .update({
+              tp1_hit: true,
+              tp2_hit: true,
+              current_contract_price: contractPrice,
+              last_update_bucket: currentBucket
+            })
+            .eq('id', trade.id);
 
-        await sendToActiveUsers(
+          await sendToActiveUsers(
 `🎯 تحقق الهدف الثاني
 
 📊 السهم: ${trade.symbol}
@@ -1419,22 +1520,22 @@ async function updateOpenTrades() {
 📈 الربح الحالي: ${fmtPercent(pnl)}
 
 🎯 هدف السهم الثاني: ${fmtPrice(trade.stock_target_2)}`
-        );
+          );
 
-        continue;
-      }
+          continue;
+        }
 
-      if (hitTp1 && !trade.tp1_hit) {
-        await supabase
-          .from('active_trades')
-          .update({
-            tp1_hit: true,
-            current_contract_price: contractPrice,
-            last_update_bucket: currentBucket
-          })
-          .eq('id', trade.id);
+        if (hitTp1 && !trade.tp1_hit) {
+          await supabase
+            .from('active_trades')
+            .update({
+              tp1_hit: true,
+              current_contract_price: contractPrice,
+              last_update_bucket: currentBucket
+            })
+            .eq('id', trade.id);
 
-        await sendToActiveUsers(
+          await sendToActiveUsers(
 `🎯 تحقق الهدف الأول
 
 📊 السهم: ${trade.symbol}
@@ -1446,54 +1547,59 @@ async function updateOpenTrades() {
 📈 الربح الحالي: ${fmtPercent(pnl)}
 
 🎯 هدف السهم الأول: ${fmtPrice(trade.stock_target_1)}`
-        );
+          );
 
-        continue;
-      }
+          continue;
+        }
 
-      if (currentBucket !== lastBucket && Math.abs(currentBucket) >= 1) {
-        await supabase
-          .from('active_trades')
-          .update({
-            current_contract_price: contractPrice,
-            last_update_bucket: currentBucket
-          })
-          .eq('id', trade.id);
+        if (currentBucket !== lastBucket && Math.abs(currentBucket) >= 1) {
+          await supabase
+            .from('active_trades')
+            .update({
+              current_contract_price: contractPrice,
+              last_update_bucket: currentBucket
+            })
+            .eq('id', trade.id);
 
-        await sendToActiveUsers(
-          buildUpdateMessage(
-            trade,
-            contractPrice,
-            stock.price,
-            pnl
-          )
-        );
-      } else {
-        await supabase
-          .from('active_trades')
-          .update({
-            current_contract_price: contractPrice
-          })
-          .eq('id', trade.id);
-      }
+          await sendToActiveUsers(
+            buildUpdateMessage(
+              trade,
+              contractPrice,
+              stock.price,
+              pnl
+            )
+          );
+        } else {
+          await supabase
+            .from('active_trades')
+            .update({
+              current_contract_price: contractPrice
+            })
+            .eq('id', trade.id);
+        }
 
-      await new Promise(resolve =>
-        setTimeout(resolve, 500)
-      );
-    } catch (err) {
-      if (err.message === 'MASSIVE_RATE_LIMIT') {
-        console.error(
-          `Update stopped for ${trade.symbol}: Massive API limit reached.`
+        await new Promise(resolve =>
+          setTimeout(resolve, 500)
         );
-      } else {
-        console.error(
-          `Update trade error ${trade.symbol}:`,
-          err.response?.data || err.message
-        );
+      } catch (err) {
+        if (err.message === 'MASSIVE_RATE_LIMIT') {
+          console.error(
+            `Update stopped for ${trade.symbol}: Massive API limit reached.`
+          );
+          break;
+        } else {
+          console.error(
+            `Update trade error ${trade.symbol}:`,
+            err.response?.data || err.message
+          );
+        }
       }
     }
+  } finally {
+    updaterRunning = false;
   }
 }
+
 // =====================
 // Bot Commands
 // =====================
@@ -1674,6 +1780,7 @@ bot.onText(/\/open/, async (msg) => {
 🎯 ${t.strike}
 📅 ${t.expiration}
 💰 الدخول: ${fmtPrice(t.entry_contract_price)}
+💰 الحالي: ${fmtPrice(t.current_contract_price)}
 🛑 الوقف: ${fmtPrice(t.stock_stop_price)}
 🎯 الهدف الأول: ${fmtPrice(t.stock_target_1)}
 🎯 الهدف الثاني: ${fmtPrice(t.stock_target_2)}
@@ -1714,6 +1821,8 @@ VWAP + ATR + RVOL
 EMA20 / EMA50
 Breakout / Breakdown Timing
 Contract Risk Protection
+Expired Contract Auto Close
+Missing Contract Snapshot Protection
 
 📅 مدة العقود:
 من ${MIN_DTE} يوم إلى ${MAX_DTE} يوم
@@ -1770,4 +1879,4 @@ setInterval(() => {
   updateOpenTrades();
 }, UPDATE_INTERVAL_MS);
 
-console.log('🎯 ST Liquidity Hunter Bot Started - Liquidity + Entry Timing Version');
+console.log('🎯 ST Liquidity Hunter Bot Started - Fixed Updates + Expired Contracts Protection');
