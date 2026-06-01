@@ -40,8 +40,8 @@ const WATCHLIST = [
   'QQQ'
 ];
 
-const SCAN_INTERVAL_MS = 3 * 60 * 1000;
-const UPDATE_INTERVAL_MS = 5 * 60 * 1000;
+const SCAN_INTERVAL_MS = 5 * 60 * 1000;
+const UPDATE_INTERVAL_MS = 10 * 60 * 1000;
 
 const COOLDOWN_HOURS = 24;
 const UPDATE_BUCKET_PERCENT = 10;
