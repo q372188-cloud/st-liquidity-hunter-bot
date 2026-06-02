@@ -46,8 +46,7 @@ function parseRadar(text) {
     askFlow: extract(/Ask Flow:\s*([0-9.]+%)/, text),
     bidFlow: extract(/Bid Flow:\s*([0-9.]+%)/, text),
     controller: extract(/الطرف المسيطر:\s*([^\n]+)/, text),
-    strength: extract(/قوة السيطرة:\s*([0-9.]+\s*\/\s*10)/, text),
-    follow: extract(/خلاصة المتابعة\s*\n([\s\S]*?)\n━━━━━━━━━━━━━━/, text, 'N/A')
+    strength: extract(/قوة السيطرة:\s*([0-9.]+\s*\/\s*10)/, text)
   };
 }
 
@@ -71,8 +70,7 @@ function parseGamma(text) {
     r3: extract(/R3️⃣\s*([0-9.]+)/, text),
     s1: extract(/S1️⃣\s*([0-9.]+)/, text),
     s2: extract(/S2️⃣\s*([0-9.]+)/, text),
-    s3: extract(/S3️⃣\s*([0-9.]+)/, text),
-    finalDecision: extract(/القرار النهائي\s*\n━━━━━━━━━━━━━━\s*\n\n?([^\n]+)/, text)
+    s3: extract(/S3️⃣\s*([0-9.]+)/, text)
   };
 }
 
@@ -91,16 +89,23 @@ function buildHtml({ symbol, radar, gamma }) {
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8" />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700;900&display=swap" rel="stylesheet">
+
 <style>
-  * { box-sizing: border-box; }
+  * {
+    box-sizing: border-box;
+    font-family: 'Noto Sans Arabic', Tahoma, Arial, sans-serif;
+  }
+
   body {
     margin: 0;
     width: 1200px;
     min-height: 1300px;
     background: #07111c;
     color: #fff;
-    font-family: Arial, Tahoma, sans-serif;
+    direction: rtl;
   }
+
   .wrap {
     padding: 26px;
     background:
@@ -108,6 +113,7 @@ function buildHtml({ symbol, radar, gamma }) {
       radial-gradient(circle at bottom left, rgba(0, 255, 120, .12), transparent 30%),
       #07111c;
   }
+
   .header {
     display: grid;
     grid-template-columns: 1fr 2fr 1fr;
@@ -118,31 +124,38 @@ function buildHtml({ symbol, radar, gamma }) {
     border-radius: 22px;
     background: linear-gradient(180deg, #101e2b, #08131e);
   }
+
   .channel {
-    font-size: 42px;
+    font-size: 40px;
     font-weight: 900;
     text-align: center;
   }
+
   .brand {
     text-align: right;
     font-size: 22px;
     color: #8fc9ff;
   }
+
   .symbol {
     font-size: 54px;
     font-weight: 900;
+    direction: ltr;
   }
+
   .radar-title {
     font-size: 28px;
     color: #54baff;
     text-align: left;
   }
+
   .top-cards {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 14px;
     margin-top: 18px;
   }
+
   .card {
     background: rgba(13, 29, 43, .92);
     border: 1px solid #294158;
@@ -150,30 +163,36 @@ function buildHtml({ symbol, radar, gamma }) {
     padding: 18px;
     min-height: 110px;
   }
+
   .label {
     color: #9fb6c9;
     font-size: 21px;
     margin-bottom: 8px;
   }
+
   .value {
-    font-size: 31px;
+    font-size: 30px;
     font-weight: 900;
   }
+
   .green { color: #67e36f; }
   .red { color: #ff5757; }
   .yellow { color: #f2c94c; }
   .blue { color: #61c4ff; }
+
   .grid2 {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 18px;
     margin-top: 18px;
   }
+
   .section-title {
     font-size: 28px;
     font-weight: 900;
     margin-bottom: 14px;
   }
+
   .row {
     display: flex;
     justify-content: space-between;
@@ -181,25 +200,39 @@ function buildHtml({ symbol, radar, gamma }) {
     border-bottom: 1px solid rgba(255,255,255,.12);
     padding: 12px 0;
     font-size: 24px;
+    gap: 18px;
   }
-  .row:last-child { border-bottom: none; }
+
+  .row:last-child {
+    border-bottom: none;
+  }
+
+  .row b {
+    direction: ltr;
+    text-align: left;
+  }
+
   .big-decision {
     border: 2px solid ${decisionColor};
     box-shadow: 0 0 22px rgba(100,255,100,.14);
     text-align: center;
   }
+
   .decision {
-    font-size: 46px;
+    font-size: 43px;
     font-weight: 900;
     color: ${decisionColor};
     margin: 8px 0;
+    direction: ltr;
   }
+
   .targets {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 12px;
     margin-top: 12px;
   }
+
   .target {
     border: 1px solid #31506b;
     border-radius: 14px;
@@ -207,27 +240,32 @@ function buildHtml({ symbol, radar, gamma }) {
     text-align: center;
     background: rgba(0,0,0,.18);
   }
+
   .target b {
     display: block;
     color: #8fc9ff;
     font-size: 20px;
     margin-bottom: 8px;
   }
+
   .target span {
     font-size: 27px;
     font-weight: 900;
   }
+
   .levels {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 14px;
   }
+
   .level-box {
     border-radius: 16px;
     padding: 16px;
     background: rgba(0,0,0,.18);
     border: 1px solid #31506b;
   }
+
   .level-line {
     display: flex;
     justify-content: space-between;
@@ -235,18 +273,24 @@ function buildHtml({ symbol, radar, gamma }) {
     font-size: 25px;
     border-bottom: 1px solid rgba(255,255,255,.1);
   }
-  .level-line:last-child { border-bottom: none; }
+
+  .level-line:last-child {
+    border-bottom: none;
+  }
+
   .summary {
     font-size: 25px;
     line-height: 1.75;
     color: #e8f4ff;
   }
+
   .footer {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
     gap: 14px;
     margin-top: 18px;
   }
+
   .note {
     text-align: center;
     font-size: 22px;
@@ -258,6 +302,7 @@ function buildHtml({ symbol, radar, gamma }) {
   }
 </style>
 </head>
+
 <body>
 <div class="wrap">
 
@@ -374,9 +419,12 @@ function buildHtml({ symbol, radar, gamma }) {
   <div class="card" style="margin-top:18px;">
     <div class="section-title blue">🧠 الخلاصة النهائية</div>
     <div class="summary">
-      القرار الحالي على ${symbol}: <b style="color:${decisionColor}">${gamma.direction}</b> بدرجة ثقة <b>${gamma.confidence}</b>.
-      الرادار يظهر أن تدفق العقود: <b>${radar.flowBias}</b>، والطرف المسيطر: <b>${radar.controller}</b>.
-      المتابعة تكون عند: <b>${gamma.entry}</b>، مع مراقبة المقاومة ${gamma.r1} والدعم ${gamma.s1}.
+      القرار الحالي على ${symbol}: <b style="color:${decisionColor}">${gamma.direction}</b>
+      بدرجة ثقة <b>${gamma.confidence}</b>.
+      الرادار يظهر أن تدفق العقود: <b>${radar.flowBias}</b>،
+      والطرف المسيطر: <b>${radar.controller}</b>.
+      المتابعة تكون عند: <b>${gamma.entry}</b>،
+      مع مراقبة المقاومة <b>${gamma.r1}</b> والدعم <b>${gamma.s1}</b>.
     </div>
   </div>
 
@@ -441,16 +489,32 @@ async function generateImage(symbol, radarText, gammaText) {
   });
 
   const page = await browser.newPage();
-  await page.setViewport({ width: 1200, height: 1300, deviceScaleFactor: 1 });
-  await page.setContent(html, { waitUntil: 'networkidle0' });
-  await page.screenshot({ path: filePath, fullPage: true });
+
+  await page.setViewport({
+    width: 1200,
+    height: 1300,
+    deviceScaleFactor: 1
+  });
+
+  await page.setJavaScriptEnabled(true);
+
+  await page.setContent(html, {
+    waitUntil: 'networkidle0'
+  });
+
+  await page.evaluateHandle('document.fonts.ready');
+
+  await page.screenshot({
+    path: filePath,
+    fullPage: true
+  });
 
   await browser.close();
 
   return filePath;
 }
 
-async function processSymbol(symbol) {
+async function processSymbol(symbol, targetChatId = ADMIN_CHAT_ID) {
   if (processingSymbols.has(symbol)) return;
 
   processingSymbols.add(symbol);
@@ -458,9 +522,15 @@ async function processSymbol(symbol) {
   try {
     const pair = await getLatestPair(symbol);
 
-    if (!pair) return;
+    if (!pair) {
+      console.log('NO PAIR FOUND:', symbol);
+      return;
+    }
 
-    if (pair.radar.processed && pair.gamma.processed) return;
+    if (pair.radar.processed && pair.gamma.processed) {
+      console.log('PAIR ALREADY PROCESSED:', symbol);
+      return;
+    }
 
     const imagePath = await generateImage(
       symbol,
@@ -469,12 +539,12 @@ async function processSymbol(symbol) {
     );
 
     await bot.sendPhoto(
-  ADMIN_CHAT_ID,
-  fs.createReadStream(imagePath),
-  {
-    caption: `📡 رادار السوق — ${symbol}\nمدرسة السوق الأمريكي`
-  }
-);
+      targetChatId,
+      fs.createReadStream(imagePath),
+      {
+        caption: `📡 رادار السوق — ${symbol}\nمدرسة السوق الأمريكي`
+      }
+    );
 
     await markProcessed([pair.radar.id, pair.gamma.id]);
 
@@ -523,19 +593,19 @@ ${msg.from.id}`
   );
 });
 
-bot.onText(/\/start/, async (msg) => {
+bot.onText(/^\/start$/, async (msg) => {
   await bot.sendMessage(
     msg.chat.id,
     '✅ بوت الصور يعمل.\nأرسل /test TSLA لاختبار آخر بيانات محفوظة.'
   );
 });
 
-bot.onText(/\/test\s+([A-Z]{1,6})/i, async (msg, match) => {
+bot.onText(/^\/test\s+([A-Z]{1,6})$/i, async (msg, match) => {
   const symbol = String(match[1]).toUpperCase();
 
   await bot.sendMessage(msg.chat.id, `⏳ جاري إنشاء صورة ${symbol}...`);
 
-  await processSymbol(symbol);
+  await processSymbol(symbol, msg.chat.id);
 });
 
 setInterval(scanSnapshots, CHECK_INTERVAL_MS);
