@@ -76,8 +76,10 @@ function parseGamma(text) {
 
 function getDecisionColor(decision) {
   const d = String(decision || '').toUpperCase();
+
   if (d.includes('CALL')) return '#5ee25e';
   if (d.includes('PUT')) return '#ff4d4d';
+
   return '#f2c94c';
 }
 
@@ -89,12 +91,13 @@ function buildHtml({ symbol, radar, gamma }) {
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8" />
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700;900&display=swap" rel="stylesheet">
+
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&family=Noto+Kufi+Arabic:wght@400;700;900&display=swap" rel="stylesheet">
 
 <style>
   * {
     box-sizing: border-box;
-    font-family: 'Noto Sans Arabic', Tahoma, Arial, sans-serif;
+    font-family: 'Cairo', 'Noto Kufi Arabic', Tahoma, Arial, sans-serif;
   }
 
   body {
@@ -102,8 +105,9 @@ function buildHtml({ symbol, radar, gamma }) {
     width: 1200px;
     min-height: 1300px;
     background: #07111c;
-    color: #fff;
+    color: #ffffff;
     direction: rtl;
+    font-family: 'Cairo', 'Noto Kufi Arabic', Tahoma, Arial, sans-serif;
   }
 
   .wrap {
@@ -129,6 +133,7 @@ function buildHtml({ symbol, radar, gamma }) {
     font-size: 40px;
     font-weight: 900;
     text-align: center;
+    color: #ffffff;
   }
 
   .brand {
@@ -141,6 +146,7 @@ function buildHtml({ symbol, radar, gamma }) {
     font-size: 54px;
     font-weight: 900;
     direction: ltr;
+    text-align: right;
   }
 
   .radar-title {
@@ -302,7 +308,6 @@ function buildHtml({ symbol, radar, gamma }) {
   }
 </style>
 </head>
-
 <body>
 <div class="wrap">
 
@@ -311,8 +316,10 @@ function buildHtml({ symbol, radar, gamma }) {
       <div class="symbol">${symbol}</div>
       <div class="brand">تحليل السيولة والقاما</div>
     </div>
-    <div class="channel">🇺🇸 مدرسة السوق الأمريكي 🇺🇸</div>
-    <div class="radar-title">📡 رادار السوق</div>
+
+    <div class="channel">مدرسة السوق الأمريكي</div>
+
+    <div class="radar-title">رادار السوق</div>
   </div>
 
   <div class="top-cards">
@@ -320,14 +327,17 @@ function buildHtml({ symbol, radar, gamma }) {
       <div class="label">السعر الحالي</div>
       <div class="value">${gamma.price !== 'N/A' ? gamma.price : radar.price}</div>
     </div>
+
     <div class="card">
       <div class="label">تغير الرادار</div>
       <div class="value ${String(radar.change).includes('-') ? 'red' : 'green'}">${radar.change}</div>
     </div>
+
     <div class="card">
       <div class="label">اتجاه الرادار</div>
       <div class="value">${radar.trend}</div>
     </div>
+
     <div class="card big-decision">
       <div class="label">القرار النهائي</div>
       <div class="decision">${gamma.direction}</div>
@@ -336,88 +346,225 @@ function buildHtml({ symbol, radar, gamma }) {
 
   <div class="grid2">
     <div class="card">
-      <div class="section-title red">❌ الإشارات السلبية</div>
-      <div class="row"><span>Bid Flow</span><b class="red">${radar.bidFlow}</b></div>
-      <div class="row"><span>Put Flow</span><b class="red">${gamma.putFlow}</b></div>
-      <div class="row"><span>الوقف الفني</span><b class="red">${gamma.stop}</b></div>
-      <div class="row"><span>دعم قريب</span><b class="red">${gamma.s1}</b></div>
+      <div class="section-title red">الإشارات السلبية</div>
+
+      <div class="row">
+        <span>Bid Flow</span>
+        <b class="red">${radar.bidFlow}</b>
+      </div>
+
+      <div class="row">
+        <span>Put Flow</span>
+        <b class="red">${gamma.putFlow}</b>
+      </div>
+
+      <div class="row">
+        <span>الوقف الفني</span>
+        <b class="red">${gamma.stop}</b>
+      </div>
+
+      <div class="row">
+        <span>دعم قريب</span>
+        <b class="red">${gamma.s1}</b>
+      </div>
     </div>
 
     <div class="card">
-      <div class="section-title green">✅ الإشارات الإيجابية</div>
-      <div class="row"><span>Call Flow</span><b class="green">${gamma.callFlow}</b></div>
-      <div class="row"><span>Ask Flow</span><b class="green">${radar.askFlow}</b></div>
-      <div class="row"><span>Gamma Regime</span><b class="green">${gamma.gammaRegime}</b></div>
-      <div class="row"><span>DEX</span><b class="green">${gamma.dex}</b></div>
+      <div class="section-title green">الإشارات الإيجابية</div>
+
+      <div class="row">
+        <span>Call Flow</span>
+        <b class="green">${gamma.callFlow}</b>
+      </div>
+
+      <div class="row">
+        <span>Ask Flow</span>
+        <b class="green">${radar.askFlow}</b>
+      </div>
+
+      <div class="row">
+        <span>Gamma Regime</span>
+        <b class="green">${gamma.gammaRegime}</b>
+      </div>
+
+      <div class="row">
+        <span>DEX</span>
+        <b class="green">${gamma.dex}</b>
+      </div>
     </div>
   </div>
 
   <div class="grid2">
     <div class="card">
-      <div class="section-title blue">💰 تدفق السيولة</div>
-      <div class="row"><span>اتجاه العقود</span><b>${radar.flowBias}</b></div>
-      <div class="row"><span>Call Flow</span><b class="green">${gamma.callFlow}</b></div>
-      <div class="row"><span>Put Flow</span><b class="red">${gamma.putFlow}</b></div>
-      <div class="row"><span>Ask / Bid</span><b>${radar.askFlow} / ${radar.bidFlow}</b></div>
-      <div class="row"><span>الطرف المسيطر</span><b>${radar.controller}</b></div>
-      <div class="row"><span>قوة السيطرة</span><b>${radar.strength}</b></div>
+      <div class="section-title blue">تدفق السيولة</div>
+
+      <div class="row">
+        <span>اتجاه العقود</span>
+        <b>${radar.flowBias}</b>
+      </div>
+
+      <div class="row">
+        <span>Call Flow</span>
+        <b class="green">${gamma.callFlow}</b>
+      </div>
+
+      <div class="row">
+        <span>Put Flow</span>
+        <b class="red">${gamma.putFlow}</b>
+      </div>
+
+      <div class="row">
+        <span>Ask / Bid</span>
+        <b>${radar.askFlow} / ${radar.bidFlow}</b>
+      </div>
+
+      <div class="row">
+        <span>الطرف المسيطر</span>
+        <b>${radar.controller}</b>
+      </div>
+
+      <div class="row">
+        <span>قوة السيطرة</span>
+        <b>${radar.strength}</b>
+      </div>
     </div>
 
     <div class="card">
-      <div class="section-title yellow">⚡ القاما والدلتا</div>
-      <div class="row"><span>Gamma Exposure</span><b>${radar.gammaExposure}</b></div>
-      <div class="row"><span>Delta Exposure</span><b>${radar.deltaExposure}</b></div>
-      <div class="row"><span>Gamma Flip</span><b>${gamma.gammaFlip}</b></div>
-      <div class="row"><span>Gamma Regime</span><b>${gamma.gammaRegime}</b></div>
-      <div class="row"><span>DEX</span><b>${gamma.dex}</b></div>
+      <div class="section-title yellow">القاما والدلتا</div>
+
+      <div class="row">
+        <span>Gamma Exposure</span>
+        <b>${radar.gammaExposure}</b>
+      </div>
+
+      <div class="row">
+        <span>Delta Exposure</span>
+        <b>${radar.deltaExposure}</b>
+      </div>
+
+      <div class="row">
+        <span>Gamma Flip</span>
+        <b>${gamma.gammaFlip}</b>
+      </div>
+
+      <div class="row">
+        <span>Gamma Regime</span>
+        <b>${gamma.gammaRegime}</b>
+      </div>
+
+      <div class="row">
+        <span>DEX</span>
+        <b>${gamma.dex}</b>
+      </div>
     </div>
   </div>
 
   <div class="card" style="margin-top:18px;">
-    <div class="section-title green">🚀 خطة المتابعة</div>
-    <div class="row"><span>الدخول</span><b>${gamma.entry}</b></div>
+    <div class="section-title green">خطة المتابعة</div>
+
+    <div class="row">
+      <span>الدخول</span>
+      <b>${gamma.entry}</b>
+    </div>
+
     <div class="targets">
-      <div class="target"><b>TP1</b><span>${gamma.tp1}</span></div>
-      <div class="target"><b>TP2</b><span>${gamma.tp2}</span></div>
-      <div class="target"><b>TP3</b><span>${gamma.tp3}</span></div>
-      <div class="target"><b>STOP</b><span class="red">${gamma.stop}</span></div>
+      <div class="target">
+        <b>TP1</b>
+        <span>${gamma.tp1}</span>
+      </div>
+
+      <div class="target">
+        <b>TP2</b>
+        <span>${gamma.tp2}</span>
+      </div>
+
+      <div class="target">
+        <b>TP3</b>
+        <span>${gamma.tp3}</span>
+      </div>
+
+      <div class="target">
+        <b>STOP</b>
+        <span class="red">${gamma.stop}</span>
+      </div>
     </div>
   </div>
 
   <div class="grid2">
     <div class="card">
-      <div class="section-title green">🟩 مقاومات الجاما</div>
+      <div class="section-title green">مقاومات الجاما</div>
+
       <div class="levels">
         <div class="level-box">
-          <div class="level-line"><span>R1</span><b>${gamma.r1}</b></div>
-          <div class="level-line"><span>R2</span><b>${gamma.r2}</b></div>
-          <div class="level-line"><span>R3</span><b>${gamma.r3}</b></div>
+          <div class="level-line">
+            <span>R1</span>
+            <b>${gamma.r1}</b>
+          </div>
+
+          <div class="level-line">
+            <span>R2</span>
+            <b>${gamma.r2}</b>
+          </div>
+
+          <div class="level-line">
+            <span>R3</span>
+            <b>${gamma.r3}</b>
+          </div>
         </div>
+
         <div class="level-box">
-          <div class="level-line"><span>Gamma Flip</span><b>${gamma.gammaFlip}</b></div>
-          <div class="level-line"><span>السعر</span><b>${gamma.price}</b></div>
+          <div class="level-line">
+            <span>Gamma Flip</span>
+            <b>${gamma.gammaFlip}</b>
+          </div>
+
+          <div class="level-line">
+            <span>السعر</span>
+            <b>${gamma.price}</b>
+          </div>
         </div>
       </div>
     </div>
 
     <div class="card">
-      <div class="section-title red">🟥 مستويات جاما سفلية</div>
+      <div class="section-title red">مستويات جاما سفلية</div>
+
       <div class="levels">
         <div class="level-box">
-          <div class="level-line"><span>S1</span><b>${gamma.s1}</b></div>
-          <div class="level-line"><span>S2</span><b>${gamma.s2}</b></div>
-          <div class="level-line"><span>S3</span><b>${gamma.s3}</b></div>
+          <div class="level-line">
+            <span>S1</span>
+            <b>${gamma.s1}</b>
+          </div>
+
+          <div class="level-line">
+            <span>S2</span>
+            <b>${gamma.s2}</b>
+          </div>
+
+          <div class="level-line">
+            <span>S3</span>
+            <b>${gamma.s3}</b>
+          </div>
         </div>
+
         <div class="level-box">
-          <div class="level-line"><span>الثقة</span><b>${gamma.confidence}</b></div>
-          <div class="level-line"><span>النطاق</span><b>${gamma.s1} ➜ ${gamma.r1}</b></div>
+          <div class="level-line">
+            <span>الثقة</span>
+            <b>${gamma.confidence}</b>
+          </div>
+
+          <div class="level-line">
+            <span>النطاق</span>
+            <b>${gamma.s1} ➜ ${gamma.r1}</b>
+          </div>
         </div>
       </div>
     </div>
   </div>
 
   <div class="card" style="margin-top:18px;">
-    <div class="section-title blue">🧠 الخلاصة النهائية</div>
+    <div class="section-title blue">الخلاصة النهائية</div>
+
     <div class="summary">
       القرار الحالي على ${symbol}: <b style="color:${decisionColor}">${gamma.direction}</b>
       بدرجة ثقة <b>${gamma.confidence}</b>.
@@ -439,7 +586,6 @@ function buildHtml({ symbol, radar, gamma }) {
 </html>
 `;
 }
-
 async function getLatestPair(symbol) {
   const since = new Date(Date.now() - PAIR_WINDOW_MINUTES * 60 * 1000).toISOString();
 
@@ -475,7 +621,10 @@ async function generateImage(symbol, radarText, gammaText) {
   const html = buildHtml({ symbol, radar, gamma });
 
   const outDir = path.join(__dirname, 'tmp');
-  if (!fs.existsSync(outDir)) fs.mkdirSync(outDir);
+
+  if (!fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir);
+  }
 
   const filePath = path.join(outDir, `radar-${symbol}-${Date.now()}.png`);
 
@@ -572,7 +721,13 @@ async function scanSnapshots() {
 
     if (error) throw error;
 
-    const symbols = [...new Set((data || []).map(x => x.symbol).filter(Boolean))];
+    const symbols = [
+      ...new Set(
+        (data || [])
+          .map(x => x.symbol)
+          .filter(Boolean)
+      )
+    ];
 
     for (const symbol of symbols) {
       await processSymbol(symbol);
@@ -603,7 +758,10 @@ bot.onText(/^\/start$/, async (msg) => {
 bot.onText(/^\/test\s+([A-Z]{1,6})$/i, async (msg, match) => {
   const symbol = String(match[1]).toUpperCase();
 
-  await bot.sendMessage(msg.chat.id, `⏳ جاري إنشاء صورة ${symbol}...`);
+  await bot.sendMessage(
+    msg.chat.id,
+    `⏳ جاري إنشاء صورة ${symbol}...`
+  );
 
   await processSymbol(symbol, msg.chat.id);
 });
