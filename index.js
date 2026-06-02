@@ -469,12 +469,12 @@ async function processSymbol(symbol) {
     );
 
     await bot.sendPhoto(
-      ADMIN_CHAT_ID,
-      imagePath,
-      {
-        caption: `📡 رادار السوق — ${symbol}\nمدرسة السوق الأمريكي`
-      }
-    );
+  ADMIN_CHAT_ID,
+  fs.createReadStream(imagePath),
+  {
+    caption: `📡 رادار السوق — ${symbol}\nمدرسة السوق الأمريكي`
+  }
+);
 
     await markProcessed([pair.radar.id, pair.gamma.id]);
 
@@ -511,6 +511,17 @@ async function scanSnapshots() {
     console.error('SCAN ERROR:', err.message);
   }
 }
+
+bot.onText(/^\/myid$/, async (msg) => {
+  await bot.sendMessage(
+    msg.chat.id,
+`chat.id:
+${msg.chat.id}
+
+from.id:
+${msg.from.id}`
+  );
+});
 
 bot.onText(/\/start/, async (msg) => {
   await bot.sendMessage(
