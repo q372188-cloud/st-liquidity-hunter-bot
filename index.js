@@ -26,8 +26,14 @@ const PAIR_WINDOW_MINUTES = Number(process.env.PAIR_WINDOW_MINUTES || 20);
 
 const processingSymbols = new Set();
 
+function stripBadEmojis(v) {
+  return String(v || '')
+    .replace(/[🟢🔴🟡⚪✅❌⚠️🚀📡📊📈📉🔥💰🧠🎯🛑👑]/g, '')
+    .trim();
+}
+
 function clean(v) {
-  return String(v || '').trim();
+  return stripBadEmojis(v);
 }
 
 function extract(regex, text, fallback = 'N/A') {
