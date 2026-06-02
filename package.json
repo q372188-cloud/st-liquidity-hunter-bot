@@ -6,6 +6,7 @@
     "@supabase/supabase-js": "latest",
     "node-telegram-bot-api": "latest",
     "puppeteer": "latest",
-    "dotenv": "latest"
+    "dotenv": "latest",
+    "axios": "latest"
   }
 }
