@@ -5,6 +5,7 @@
   "dependencies": {
     "@supabase/supabase-js": "latest",
     "node-telegram-bot-api": "latest",
-    "puppeteer": "latest"
+    "puppeteer": "latest",
+    "dotenv": "latest"
   }
 }
