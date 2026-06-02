@@ -498,7 +498,7 @@ function buildHtml({ symbol, radar, gamma }) {
 
   <div class="grid2">
     <div class="card">
-      <div class="section-title green">مقاومات الجاما</div>
+      <div class="section-title green">مقاومات القاما</div>
 
       <div class="levels">
         <div class="level-box">
@@ -533,7 +533,7 @@ function buildHtml({ symbol, radar, gamma }) {
     </div>
 
     <div class="card">
-      <div class="section-title red">مستويات جاما سفلية</div>
+      <div class="section-title red">مستويات قاما سفلية</div>
 
       <div class="levels">
         <div class="level-box">
