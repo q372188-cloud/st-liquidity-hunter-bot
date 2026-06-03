@@ -743,38 +743,6 @@ async function scanSnapshots() {
   }
 }
 
-/*
-bot.onText(/^\/myid$/, async (msg) => {
-  await bot.sendMessage(
-    msg.chat.id,
-`chat.id:
-${msg.chat.id}
-
-from.id:
-${msg.from.id}`
-  );
-});
-*/
-/*
-bot.onText(/^\/start$/, async (msg) => {
-  await bot.sendMessage(
-    msg.chat.id,
-    '✅ بوت الصور يعمل.\nأرسل /test TSLA لاختبار آخر بيانات محفوظة.'
-  );
-});
-*/
-/*
-bot.onText(/^\/test\s+([A-Z]{1,6})$/i, async (msg, match) => {
-  const symbol = String(match[1]).toUpperCase();
-
-  await bot.sendMessage(
-    msg.chat.id,
-    `⏳ جاري إنشاء صورة ${symbol}...`
-  );
-
-  await processSymbol(symbol, msg.chat.id);
-});
-*/
 setInterval(scanSnapshots, CHECK_INTERVAL_MS);
 
 scanSnapshots();
