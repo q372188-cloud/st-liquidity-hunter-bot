@@ -697,7 +697,7 @@ async function processSymbol(symbol, targetChatId = ADMIN_CHAT_ID) {
       targetChatId,
       fs.createReadStream(imagePath),
       {
-        caption: `📡 رادار مدرسة السوق الامريكي — ${symbol}\`
+        caption: `📡 رادار مدرسة السوق الامريكي — ${symbol}`
       }
     );
 
