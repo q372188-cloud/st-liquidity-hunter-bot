@@ -323,9 +323,9 @@ function buildHtml({ symbol, radar, gamma }) {
       <div class="brand">تحليل السيولة والقاما</div>
     </div>
 
-    <div class="channel">VIP</div>
+    <div class="channel">مدرسة السوق الامريكي</div>
 
-    <div class="radar-title">رادار مدرسة السوق الامريكي</div>
+    <div class="radar-title">رادار السوق</div>
   </div>
 
   <div class="top-cards">
@@ -697,7 +697,7 @@ async function processSymbol(symbol, targetChatId = ADMIN_CHAT_ID) {
       targetChatId,
       fs.createReadStream(imagePath),
       {
-        caption: `📡 رادار السوق — ${symbol}\nمدرسة السوق الأمريكي`
+        caption: `📡 رادار مدرسة السوق الامريكي — ${symbol}\`
       }
     );
 
