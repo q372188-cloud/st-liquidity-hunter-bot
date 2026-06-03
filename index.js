@@ -323,9 +323,9 @@ function buildHtml({ symbol, radar, gamma }) {
       <div class="brand">تحليل السيولة والقاما</div>
     </div>
 
-    <div class="channel">مدرسة السوق الأمريكي</div>
+    <div class="channel">VIP</div>
 
-    <div class="radar-title">رادار السوق</div>
+    <div class="radar-title">رادار مدرسة السوق الامريكي</div>
   </div>
 
   <div class="top-cards">
