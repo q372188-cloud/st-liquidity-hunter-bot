@@ -26,6 +26,104 @@ const PAIR_WINDOW_MINUTES = Number(process.env.PAIR_WINDOW_MINUTES || 20);
 
 const processingSymbols = new Set();
 
+const userMode = {};
+const SERVICE_IMAGE = 'image';
+
+function mainMenu() {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🖼 صورة القاما + السيولة', callback_data: 'image_service' }]
+      ]
+    }
+  };
+}
+
+function normalizeSymbol(v) {
+  return String(v || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '')
+    .slice(0, 10);
+}
+
+async function hasServiceAccess(userId, service) {
+  const { data, error } = await imageSupabase
+    .from('service_subscriptions')
+    .select('id')
+    .eq('user_id', String(userId))
+    .eq('service', service)
+    .eq('active', true)
+    .gt('expires_at', new Date().toISOString())
+    .maybeSingle();
+
+  if (error) {
+    console.error('ACCESS CHECK ERROR:', error.message);
+    return false;
+  }
+
+  return !!data;
+}
+
+async function activateServiceCode(userId, code, service, fromUser = {}) {
+  const nowIso = new Date().toISOString();
+
+  const username = fromUser.username || null;
+  const firstName = fromUser.first_name || null;
+
+  const { data: codeRow, error: codeError } = await imageSupabase
+    .from('service_codes')
+    .select('*')
+    .eq('code', String(code).trim().toUpperCase())
+    .eq('service', service)
+    .eq('active', true)
+    .is('used_by', null)
+    .gt('expires_at', nowIso)
+    .maybeSingle();
+
+  if (codeError) {
+    console.error('CODE CHECK ERROR:', codeError.message);
+    return { ok: false, message: 'حدث خطأ أثناء التحقق من الكود.' };
+  }
+
+  if (!codeRow) {
+    return { ok: false, message: '❌ الكود غير صحيح أو مستخدم أو منتهي.' };
+  }
+
+  const { error: upsertError } = await imageSupabase
+    .from('service_subscriptions')
+    .upsert({
+      user_id: String(userId),
+      username,
+      first_name: firstName,
+      service,
+      active: true,
+      expires_at: codeRow.expires_at
+    }, {
+      onConflict: 'user_id,service'
+    });
+
+  if (upsertError) {
+    console.error('SUBSCRIPTION UPSERT ERROR:', upsertError.message);
+    return { ok: false, message: 'حدث خطأ أثناء تفعيل الاشتراك.' };
+  }
+
+  const { error: updateCodeError } = await imageSupabase
+    .from('service_codes')
+    .update({
+      active: false,
+      used_by: String(userId),
+      used_at: nowIso
+    })
+    .eq('id', codeRow.id);
+
+  if (updateCodeError) {
+    console.error('CODE UPDATE ERROR:', updateCodeError.message);
+  }
+
+  return { ok: true, message: '✅ تم تفعيل اشتراك الصور بنجاح.\nاكتب رمز الشركة الآن مثل: TSLA' };
+}
+
 function stripBadEmojis(v) {
   return String(v || '')
     .replace(/[🟢🔴🟡⚪✅❌⚠️🚀📡📊📈📉🔥💰🧠🎯🛑👑]/g, '')
@@ -592,6 +690,7 @@ function buildHtml({ symbol, radar, gamma }) {
 </html>
 `;
 }
+
 async function getLatestPair(symbol) {
   const since = new Date(Date.now() - PAIR_WINDOW_MINUTES * 60 * 1000).toISOString();
 
@@ -670,19 +769,30 @@ async function generateImage(symbol, radarText, gammaText) {
 }
 
 async function processSymbol(symbol, targetChatId = ADMIN_CHAT_ID) {
-  if (processingSymbols.has(symbol)) return;
+  const isManualRequest = String(targetChatId) !== String(ADMIN_CHAT_ID);
+  const lockKey = `${symbol}:${targetChatId}`;
 
-  processingSymbols.add(symbol);
+  if (processingSymbols.has(lockKey)) return;
+
+  processingSymbols.add(lockKey);
 
   try {
     const pair = await getLatestPair(symbol);
 
     if (!pair) {
       console.log('NO PAIR FOUND:', symbol);
+
+      if (isManualRequest) {
+        await bot.sendMessage(
+          targetChatId,
+          `❌ لا توجد بيانات قاما وسيولة مكتملة لـ ${symbol} خلال آخر ${PAIR_WINDOW_MINUTES} دقيقة.`
+        );
+      }
+
       return;
     }
 
-    if (pair.radar.processed && pair.gamma.processed) {
+    if (!isManualRequest && pair.radar.processed && pair.gamma.processed) {
       console.log('PAIR ALREADY PROCESSED:', symbol);
       return;
     }
@@ -701,17 +811,98 @@ async function processSymbol(symbol, targetChatId = ADMIN_CHAT_ID) {
       }
     );
 
-    await markProcessed([pair.radar.id, pair.gamma.id]);
+    if (!isManualRequest) {
+      await markProcessed([pair.radar.id, pair.gamma.id]);
+    }
 
     fs.unlinkSync(imagePath);
 
     console.log('IMAGE SENT:', symbol);
   } catch (err) {
     console.error('PROCESS SYMBOL ERROR:', symbol, err.message);
+
+    if (isManualRequest) {
+      await bot.sendMessage(targetChatId, 'حدث خطأ أثناء تجهيز الصورة. حاول مرة أخرى.');
+    }
   } finally {
-    processingSymbols.delete(symbol);
+    processingSymbols.delete(lockKey);
   }
 }
+
+bot.onText(/\/start/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  await bot.sendMessage(
+    chatId,
+    'أهلًا بك في خدمة صور القاما والسيولة.\nاختر الخدمة:',
+    mainMenu()
+  );
+});
+
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+
+  await bot.answerCallbackQuery(query.id);
+
+  if (query.data === 'image_service') {
+    const ok = await hasServiceAccess(chatId, SERVICE_IMAGE);
+
+    if (!ok) {
+      userMode[chatId] = 'activate_image';
+      return bot.sendMessage(chatId, '🔐 أدخل كود اشتراك الصور:');
+    }
+
+    userMode[chatId] = 'image_symbol';
+    return bot.sendMessage(chatId, '🖼 اكتب رمز الشركة مثل: TSLA');
+  }
+});
+
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const text = String(msg.text || '').trim();
+
+  if (!text || text.startsWith('/')) return;
+
+  const mode = userMode[chatId];
+
+  if (mode === 'activate_image') {
+    const result = await activateServiceCode(
+      chatId,
+      text,
+      SERVICE_IMAGE,
+      msg.from || {}
+    );
+
+    await bot.sendMessage(chatId, result.message);
+
+    if (result.ok) {
+      userMode[chatId] = 'image_symbol';
+    }
+
+    return;
+  }
+
+  if (mode === 'image_symbol') {
+    const symbol = normalizeSymbol(text);
+
+    if (!symbol) {
+      return bot.sendMessage(chatId, 'اكتب رمز صحيح مثل: TSLA');
+    }
+
+    const ok = await hasServiceAccess(chatId, SERVICE_IMAGE);
+
+    if (!ok) {
+      userMode[chatId] = 'activate_image';
+      return bot.sendMessage(chatId, '🔐 اشتراك الصور غير مفعل أو منتهي.\nأدخل كود اشتراك الصور:');
+    }
+
+    await bot.sendMessage(chatId, `⏳ جاري تجهيز صورة ${symbol}...`);
+
+    await processSymbol(symbol, chatId);
+
+    return;
+  }
+});
 
 async function scanSnapshots() {
   try {
