@@ -829,6 +829,57 @@ async function processSymbol(symbol, targetChatId = ADMIN_CHAT_ID) {
   }
 }
 
+function makeCode(service = 'IMAGE') {
+  const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `${service}-${random}`;
+}
+
+function parseDurationDays(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
+
+bot.onText(/\/createimagecode(?:\s+(\d+))?/, async (msg, match) => {
+  const chatId = msg.chat.id;
+
+  if (String(chatId) !== String(ADMIN_CHAT_ID)) {
+    return bot.sendMessage(chatId, '❌ هذا الأمر للأدمن فقط.');
+  }
+
+  const days = parseDurationDays(match[1] || 30);
+
+  if (!days) {
+    return bot.sendMessage(chatId, 'استخدم الأمر بهذا الشكل:\n/createimagecode 30');
+  }
+
+  const code = makeCode('IMAGE');
+  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+
+  const { error } = await imageSupabase
+    .from('service_codes')
+    .insert({
+      code,
+      service: SERVICE_IMAGE,
+      active: true,
+      expires_at: expiresAt
+    });
+
+  if (error) {
+    console.error('CREATE IMAGE CODE ERROR:', error.message);
+    return bot.sendMessage(chatId, 'حدث خطأ أثناء إنشاء الكود.');
+  }
+
+  return bot.sendMessage(
+    chatId,
+    `✅ تم إنشاء كود الصور\n\n` +
+    `🔐 الكود: \`${code}\`\n` +
+    `⏳ المدة: ${days} يوم\n` +
+    `📌 الخدمة: الصور`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
 
