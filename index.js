@@ -21,6 +21,11 @@ const imageSupabase = createClient(
   process.env.IMAGE_SUPABASE_KEY
 );
 
+const hubSupabase = createClient(
+  process.env.HUB_SUPABASE_URL,
+  process.env.HUB_SUPABASE_KEY
+);
+
 const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 30 * 1000);
 const PAIR_WINDOW_MINUTES = Number(process.env.PAIR_WINDOW_MINUTES || 20);
 
@@ -48,21 +53,26 @@ function normalizeSymbol(v) {
 }
 
 async function hasServiceAccess(userId, service) {
-  const { data, error } = await imageSupabase
-    .from('service_subscriptions')
-    .select('id')
+  if (String(userId) === String(ADMIN_CHAT_ID)) {
+    return true;
+  }
+
+  const { data, error } = await hubSupabase
+    .from('hub_subscriptions')
+    .select('services, active, expires_at')
     .eq('user_id', String(userId))
-    .eq('service', service)
     .eq('active', true)
     .gt('expires_at', new Date().toISOString())
     .maybeSingle();
 
   if (error) {
-    console.error('ACCESS CHECK ERROR:', error.message);
+    console.error('HUB IMAGE ACCESS ERROR:', error.message);
     return false;
   }
 
-  return !!data;
+  return !!data &&
+    Array.isArray(data.services) &&
+    data.services.includes(service);
 }
 
 async function activateServiceCode(userId, code, service, fromUser = {}) {
