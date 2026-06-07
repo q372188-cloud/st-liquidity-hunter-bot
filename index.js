@@ -178,6 +178,9 @@ function parseGamma(text) {
     gammaRegime: extract(/Gamma Regime:\s*\n([^\n]+)/, text),
     gammaFlip: extract(/(?:Gamma Flip|نقطة التوازن التاريخية)\s*:\s*\n([^\n]+)/, text),
 
+    intradayBalance: extract(/نقطة التوازن اللحظية\s*:\s*\n([0-9.]+)/, text),
+    intradayBalancePower: extract(/نقطة التوازن اللحظية\s*:\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
+
     realCallWall: extract(/Call Wall\s*:\s*\n([0-9.]+)/, text),
     realCallWallPower: extract(/Call Wall\s*:\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
 
@@ -212,11 +215,12 @@ function gammaMapRows(gamma) {
     { price: gamma.r3, side: 'call', label: 'R3 قريب', power: 75 },
     { price: gamma.r2, side: 'call', label: 'R2 قريب', power: 60 },
     { price: gamma.r1, side: 'call', label: 'R1 قريب', power: 45 },
+    { price: gamma.intradayBalance, side: 'flip', label: 'نقطة التوازن اللحظية', power: 100 },
     { price: gamma.s1, side: 'put', label: 'S1 قريب', power: 45 },
     { price: gamma.s2, side: 'put', label: 'S2 قريب', power: 60 },
     { price: gamma.s3, side: 'put', label: 'S3 قريب', power: 75 },
-    { price: gamma.gammaFlip, side: 'flip', label: 'نقطة التوازن التاريخية', power: 100 },
-    { price: gamma.realPutWall, side: 'put', label: 'جدار البوت ', power: 100 }
+    { price: gamma.realPutWall, side: 'put', label: 'جدار البوت ', power: 100 },
+    { price: gamma.gammaFlip, side: 'flip', label: 'نقطة التوازن التاريخية', power: 100 }
   ].filter(x => x.price && x.price !== 'N/A');
 
   return rows.map(x => `
@@ -317,7 +321,7 @@ function buildHtml({ symbol, radar, gamma }) {
     padding: 18px;
     min-height: 110px;
   }
-      .label {
+        .label {
     color: #9fb6c9;
     font-size: 21px;
     margin-bottom: 8px;
@@ -503,10 +507,10 @@ function buildHtml({ symbol, radar, gamma }) {
     border: 1px solid #31506b;
     border-radius: 14px;
     background: rgba(0,0,0,.18);
-    font-size: 20px;
+    font-size: 18px;
     display: flex;
     justify-content: space-between;
-    gap: 10px;
+    gap: 8px;
   }
 
   .summary {
@@ -669,7 +673,7 @@ function buildHtml({ symbol, radar, gamma }) {
 
       <div class="mini-level-strip">
         <span class="green">Call Wall: ${gamma.realCallWall}</span>
-        <span class="yellow">توازن تاريخي: ${gamma.gammaFlip}</span>
+        <span class="yellow">لحظي: ${gamma.intradayBalance}</span>
         <span class="red">Put Wall: ${gamma.realPutWall}</span>
       </div>
 
@@ -744,8 +748,8 @@ function buildHtml({ symbol, radar, gamma }) {
           </div>
 
           <div class="level-line">
-            <span>نقطة التوازن التاريخية</span>
-            <b>${gamma.gammaFlip}</b>
+            <span>نقطة التوازن اللحظية</span>
+            <b>${gamma.intradayBalance}</b>
           </div>
 
           <div class="level-line">
@@ -784,6 +788,11 @@ function buildHtml({ symbol, radar, gamma }) {
           </div>
 
           <div class="level-line">
+            <span>نقطة التوازن التاريخية</span>
+            <b>${gamma.gammaFlip}</b>
+          </div>
+
+          <div class="level-line">
             <span>الثقة</span>
             <b>${gamma.confidence}</b>
           </div>
@@ -808,6 +817,7 @@ function buildHtml({ symbol, radar, gamma }) {
       المتابعة تكون عند: <b>${gamma.entry}</b>،
       مع مراقبة Call Wall <b>${gamma.realCallWall}</b>
       و Put Wall <b>${gamma.realPutWall}</b>
+      و نقطة التوازن اللحظية <b>${gamma.intradayBalance}</b>
       و نقطة التوازن التاريخية <b>${gamma.gammaFlip}</b>.
     </div>
   </div>
