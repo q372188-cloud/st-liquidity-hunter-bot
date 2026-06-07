@@ -174,11 +174,20 @@ function parseGamma(text) {
     tp2: extract(/TP2:\s*([^\n]+)/, text),
     tp3: extract(/TP3:\s*([^\n]+)/, text),
     stop: extract(/الوقف الفني:\s*\n([^\n]+)/, text),
+
     gammaRegime: extract(/Gamma Regime:\s*\n([^\n]+)/, text),
-    gammaFlip: extract(/Gamma Flip:\s*\n([^\n]+)/, text),
+    gammaFlip: extract(/Gamma Flip(?: الحقيقي)?:\s*\n([^\n]+)/, text),
+
+    realCallWall: extract(/Call Wall الحقيقي:\s*\n([0-9.]+)/, text),
+    realCallWallPower: extract(/Call Wall الحقيقي:\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
+
+    realPutWall: extract(/Put Wall الحقيقي:\s*\n([0-9.]+)/, text),
+    realPutWallPower: extract(/Put Wall الحقيقي:\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
+
     dex: extract(/DEX:\s*\n([^\n]+)/, text),
     callFlow: extract(/Call Flow:\s*([+\-]?[0-9.]+%)/, text),
     putFlow: extract(/Put Flow:\s*([+\-]?[0-9.]+%)/, text),
+
     r1: extract(/R1️⃣\s*([0-9.]+)/, text),
     r2: extract(/R2️⃣\s*([0-9.]+)/, text),
     r3: extract(/R3️⃣\s*([0-9.]+)/, text),
@@ -199,13 +208,15 @@ function getDecisionColor(decision) {
 
 function gammaMapRows(gamma) {
   const rows = [
-    { price: gamma.r3, side: 'call', label: 'R3 / جدار الكول', power: 100 },
-    { price: gamma.r2, side: 'call', label: 'R2', power: 78 },
-    { price: gamma.r1, side: 'call', label: 'R1', power: 58 },
+    { price: gamma.realCallWall, side: 'call', label: 'جدار الكول الحقيقي', power: 100 },
+    { price: gamma.r3, side: 'call', label: 'R3 قريب', power: 75 },
+    { price: gamma.r2, side: 'call', label: 'R2 قريب', power: 60 },
+    { price: gamma.r1, side: 'call', label: 'R1 قريب', power: 45 },
     { price: gamma.gammaFlip, side: 'flip', label: 'نقطة التحول', power: 100 },
-    { price: gamma.s1, side: 'put', label: 'S1', power: 55 },
-    { price: gamma.s2, side: 'put', label: 'S2', power: 75 },
-    { price: gamma.s3, side: 'put', label: 'S3 / جدار البوت', power: 100 }
+    { price: gamma.s1, side: 'put', label: 'S1 قريب', power: 45 },
+    { price: gamma.s2, side: 'put', label: 'S2 قريب', power: 60 },
+    { price: gamma.s3, side: 'put', label: 'S3 قريب', power: 75 },
+    { price: gamma.realPutWall, side: 'put', label: 'جدار البوت الحقيقي', power: 100 }
   ].filter(x => x.price && x.price !== 'N/A');
 
   return rows.map(x => `
@@ -222,7 +233,8 @@ function gammaMapRows(gamma) {
 function buildHtml({ symbol, radar, gamma }) {
   const decisionColor = getDecisionColor(gamma.direction);
   const gexRows = gammaMapRows(gamma);
-    return `
+
+  return `
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -305,8 +317,7 @@ function buildHtml({ symbol, radar, gamma }) {
     padding: 18px;
     min-height: 110px;
   }
-
-  .label {
+    .label {
     color: #9fb6c9;
     font-size: 21px;
     margin-bottom: 8px;
@@ -426,7 +437,7 @@ function buildHtml({ symbol, radar, gamma }) {
 
   .gex-head {
     display: grid;
-    grid-template-columns: 90px 1fr 160px;
+    grid-template-columns: 90px 1fr 190px;
     color: #9fb6c9;
     font-size: 17px;
     margin-bottom: 10px;
@@ -434,7 +445,7 @@ function buildHtml({ symbol, radar, gamma }) {
 
   .gex-row {
     display: grid;
-    grid-template-columns: 90px 1fr 160px;
+    grid-template-columns: 90px 1fr 190px;
     align-items: center;
     gap: 10px;
     padding: 8px 0;
@@ -478,7 +489,7 @@ function buildHtml({ symbol, radar, gamma }) {
   }
 
   .gex-label {
-    font-size: 18px;
+    font-size: 17px;
     font-weight: 800;
   }
 
@@ -492,7 +503,7 @@ function buildHtml({ symbol, radar, gamma }) {
     border: 1px solid #31506b;
     border-radius: 14px;
     background: rgba(0,0,0,.18);
-    font-size: 21px;
+    font-size: 20px;
     display: flex;
     justify-content: space-between;
     gap: 10px;
@@ -607,7 +618,8 @@ function buildHtml({ symbol, radar, gamma }) {
       </div>
     </div>
   </div>
-    <div class="grid2">
+
+  <div class="grid2">
     <div class="card">
       <div class="section-title blue">تدفق السيولة</div>
 
@@ -656,9 +668,9 @@ function buildHtml({ symbol, radar, gamma }) {
       </div>
 
       <div class="mini-level-strip">
-        <span class="green">Call Wall: ${gamma.r3}</span>
+        <span class="green">Call Wall: ${gamma.realCallWall}</span>
         <span class="yellow">Flip: ${gamma.gammaFlip}</span>
-        <span class="red">Put Wall: ${gamma.s3}</span>
+        <span class="red">Put Wall: ${gamma.realPutWall}</span>
       </div>
 
       <div class="row">
@@ -672,8 +684,7 @@ function buildHtml({ symbol, radar, gamma }) {
       </div>
     </div>
   </div>
-
-  <div class="card" style="margin-top:18px;">
+    <div class="card" style="margin-top:18px;">
     <div class="section-title green">خطة المتابعة</div>
 
     <div class="row">
@@ -706,7 +717,7 @@ function buildHtml({ symbol, radar, gamma }) {
 
   <div class="grid2">
     <div class="card">
-      <div class="section-title green">مقاومات القاما</div>
+      <div class="section-title green">مقاومات القاما القريبة</div>
 
       <div class="levels">
         <div class="level-box">
@@ -728,6 +739,11 @@ function buildHtml({ symbol, radar, gamma }) {
 
         <div class="level-box">
           <div class="level-line">
+            <span>Call Wall الحقيقي</span>
+            <b>${gamma.realCallWall}</b>
+          </div>
+
+          <div class="level-line">
             <span>Gamma Flip</span>
             <b>${gamma.gammaFlip}</b>
           </div>
@@ -741,7 +757,7 @@ function buildHtml({ symbol, radar, gamma }) {
     </div>
 
     <div class="card">
-      <div class="section-title red">مستويات قاما سفلية</div>
+      <div class="section-title red">مستويات قاما سفلية قريبة</div>
 
       <div class="levels">
         <div class="level-box">
@@ -762,6 +778,11 @@ function buildHtml({ symbol, radar, gamma }) {
         </div>
 
         <div class="level-box">
+          <div class="level-line">
+            <span>Put Wall الحقيقي</span>
+            <b>${gamma.realPutWall}</b>
+          </div>
+
           <div class="level-line">
             <span>الثقة</span>
             <b>${gamma.confidence}</b>
@@ -785,7 +806,9 @@ function buildHtml({ symbol, radar, gamma }) {
       الرادار يظهر أن تدفق العقود: <b>${radar.flowBias}</b>،
       والطرف المسيطر: <b>${radar.controller}</b>.
       المتابعة تكون عند: <b>${gamma.entry}</b>،
-      مع مراقبة المقاومة <b>${gamma.r1}</b> والدعم <b>${gamma.s1}</b>.
+      مع مراقبة Call Wall الحقيقي <b>${gamma.realCallWall}</b>
+      و Put Wall الحقيقي <b>${gamma.realPutWall}</b>
+      و Gamma Flip <b>${gamma.gammaFlip}</b>.
     </div>
   </div>
 
