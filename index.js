@@ -197,10 +197,32 @@ function getDecisionColor(decision) {
   return '#f2c94c';
 }
 
+function gammaMapRows(gamma) {
+  const rows = [
+    { price: gamma.r3, side: 'call', label: 'R3 / جدار الكول', power: 100 },
+    { price: gamma.r2, side: 'call', label: 'R2', power: 78 },
+    { price: gamma.r1, side: 'call', label: 'R1', power: 58 },
+    { price: gamma.gammaFlip, side: 'flip', label: 'نقطة التحول', power: 100 },
+    { price: gamma.s1, side: 'put', label: 'S1', power: 55 },
+    { price: gamma.s2, side: 'put', label: 'S2', power: 75 },
+    { price: gamma.s3, side: 'put', label: 'S3 / جدار البوت', power: 100 }
+  ].filter(x => x.price && x.price !== 'N/A');
+
+  return rows.map(x => `
+    <div class="gex-row">
+      <div class="gex-price">${x.price}</div>
+      <div class="gex-track">
+        <div class="gex-bar ${x.side}" style="width:${x.power}%"></div>
+      </div>
+      <div class="gex-label ${x.side}">${x.label}</div>
+    </div>
+  `).join('');
+}
+
 function buildHtml({ symbol, radar, gamma }) {
   const decisionColor = getDecisionColor(gamma.direction);
-
-  return `
+  const gexRows = gammaMapRows(gamma);
+    return `
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -398,6 +420,84 @@ function buildHtml({ symbol, radar, gamma }) {
     border-bottom: none;
   }
 
+  .gamma-map {
+    margin-top: 6px;
+  }
+
+  .gex-head {
+    display: grid;
+    grid-template-columns: 90px 1fr 160px;
+    color: #9fb6c9;
+    font-size: 17px;
+    margin-bottom: 10px;
+  }
+
+  .gex-row {
+    display: grid;
+    grid-template-columns: 90px 1fr 160px;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,.08);
+  }
+
+  .gex-row:last-child {
+    border-bottom: none;
+  }
+
+  .gex-price {
+    font-size: 23px;
+    font-weight: 900;
+    direction: ltr;
+    text-align: left;
+  }
+
+  .gex-track {
+    height: 20px;
+    background: rgba(255,255,255,.08);
+    border-radius: 999px;
+    overflow: hidden;
+    direction: ltr;
+  }
+
+  .gex-bar {
+    height: 100%;
+    border-radius: 999px;
+  }
+
+  .gex-bar.call {
+    background: linear-gradient(90deg, #1f8f3a, #67e36f);
+  }
+
+  .gex-bar.put {
+    background: linear-gradient(90deg, #7a1515, #ff5757);
+  }
+
+  .gex-bar.flip {
+    background: linear-gradient(90deg, #8a6d00, #f2c94c);
+  }
+
+  .gex-label {
+    font-size: 18px;
+    font-weight: 800;
+  }
+
+  .gex-label.call { color: #67e36f; }
+  .gex-label.put { color: #ff5757; }
+  .gex-label.flip { color: #f2c94c; }
+
+  .mini-level-strip {
+    margin-top: 14px;
+    padding: 12px;
+    border: 1px solid #31506b;
+    border-radius: 14px;
+    background: rgba(0,0,0,.18);
+    font-size: 21px;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
   .summary {
     font-size: 25px;
     line-height: 1.75;
@@ -507,8 +607,7 @@ function buildHtml({ symbol, radar, gamma }) {
       </div>
     </div>
   </div>
-
-  <div class="grid2">
+    <div class="grid2">
     <div class="card">
       <div class="section-title blue">تدفق السيولة</div>
 
@@ -544,7 +643,23 @@ function buildHtml({ symbol, radar, gamma }) {
     </div>
 
     <div class="card">
-      <div class="section-title yellow">القاما والدلتا</div>
+      <div class="section-title yellow">خريطة القاما</div>
+
+      <div class="gamma-map">
+        <div class="gex-head">
+          <span>السعر</span>
+          <span>قوة المستوى</span>
+          <span>النوع</span>
+        </div>
+
+        ${gexRows}
+      </div>
+
+      <div class="mini-level-strip">
+        <span class="green">Call Wall: ${gamma.r3}</span>
+        <span class="yellow">Flip: ${gamma.gammaFlip}</span>
+        <span class="red">Put Wall: ${gamma.s3}</span>
+      </div>
 
       <div class="row">
         <span>Gamma Exposure</span>
@@ -554,21 +669,6 @@ function buildHtml({ symbol, radar, gamma }) {
       <div class="row">
         <span>Delta Exposure</span>
         <b>${radar.deltaExposure}</b>
-      </div>
-
-      <div class="row">
-        <span>Gamma Flip</span>
-        <b>${gamma.gammaFlip}</b>
-      </div>
-
-      <div class="row">
-        <span>Gamma Regime</span>
-        <b>${gamma.gammaRegime}</b>
-      </div>
-
-      <div class="row">
-        <span>DEX</span>
-        <b>${gamma.dex}</b>
       </div>
     </div>
   </div>
