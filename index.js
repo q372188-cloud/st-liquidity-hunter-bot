@@ -176,7 +176,7 @@ function parseGamma(text) {
     stop: extract(/الوقف الفني:\s*\n([^\n]+)/, text),
 
     gammaRegime: extract(/Gamma Regime:\s*\n([^\n]+)/, text),
-    gammaFlip: extract(/Gamma Flip:\s*\n([^\n]+)/, text),
+    gammaFlip: extract(/Gamma Flip\s*:\s*\n([^\n]+)/, text),
 
     realCallWall: extract(/Call Wall :\s*\n([0-9.]+)/, text),
     realCallWallPower: extract(/Call Wall :\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
