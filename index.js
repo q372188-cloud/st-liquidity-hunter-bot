@@ -176,13 +176,13 @@ function parseGamma(text) {
     stop: extract(/الوقف الفني:\s*\n([^\n]+)/, text),
 
     gammaRegime: extract(/Gamma Regime:\s*\n([^\n]+)/, text),
-    gammaFlip: extract(/Gamma Flip\s*:\s*\n([^\n]+)/, text),
+    gammaFlip: extract(/(?:Gamma Flip|نقطة التوازن التاريخية)\s*:\s*\n([^\n]+)/, text),
 
-    realCallWall: extract(/Call Wall :\s*\n([0-9.]+)/, text),
-    realCallWallPower: extract(/Call Wall :\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
+    realCallWall: extract(/Call Wall\s*:\s*\n([0-9.]+)/, text),
+    realCallWallPower: extract(/Call Wall\s*:\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
 
-    realPutWall: extract(/Put Wall :\s*\n([0-9.]+)/, text),
-    realPutWallPower: extract(/Put Wall :\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
+    realPutWall: extract(/Put Wall\s*:\s*\n([0-9.]+)/, text),
+    realPutWallPower: extract(/Put Wall\s*:\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
 
     dex: extract(/DEX:\s*\n([^\n]+)/, text),
     callFlow: extract(/Call Flow:\s*([+\-]?[0-9.]+%)/, text),
@@ -212,10 +212,10 @@ function gammaMapRows(gamma) {
     { price: gamma.r3, side: 'call', label: 'R3 قريب', power: 75 },
     { price: gamma.r2, side: 'call', label: 'R2 قريب', power: 60 },
     { price: gamma.r1, side: 'call', label: 'R1 قريب', power: 45 },
-    { price: gamma.gammaFlip, side: 'flip', label: 'نقطة التحول', power: 100 },
     { price: gamma.s1, side: 'put', label: 'S1 قريب', power: 45 },
     { price: gamma.s2, side: 'put', label: 'S2 قريب', power: 60 },
     { price: gamma.s3, side: 'put', label: 'S3 قريب', power: 75 },
+    { price: gamma.gammaFlip, side: 'flip', label: 'نقطة التوازن التاريخية', power: 100 },
     { price: gamma.realPutWall, side: 'put', label: 'جدار البوت ', power: 100 }
   ].filter(x => x.price && x.price !== 'N/A');
 
@@ -317,7 +317,7 @@ function buildHtml({ symbol, radar, gamma }) {
     padding: 18px;
     min-height: 110px;
   }
-    .label {
+      .label {
     color: #9fb6c9;
     font-size: 21px;
     margin-bottom: 8px;
@@ -669,7 +669,7 @@ function buildHtml({ symbol, radar, gamma }) {
 
       <div class="mini-level-strip">
         <span class="green">Call Wall: ${gamma.realCallWall}</span>
-        <span class="yellow">Flip: ${gamma.gammaFlip}</span>
+        <span class="yellow">توازن تاريخي: ${gamma.gammaFlip}</span>
         <span class="red">Put Wall: ${gamma.realPutWall}</span>
       </div>
 
@@ -684,7 +684,8 @@ function buildHtml({ symbol, radar, gamma }) {
       </div>
     </div>
   </div>
-    <div class="card" style="margin-top:18px;">
+
+  <div class="card" style="margin-top:18px;">
     <div class="section-title green">خطة المتابعة</div>
 
     <div class="row">
@@ -714,8 +715,7 @@ function buildHtml({ symbol, radar, gamma }) {
       </div>
     </div>
   </div>
-
-  <div class="grid2">
+    <div class="grid2">
     <div class="card">
       <div class="section-title green">مقاومات القاما القريبة</div>
 
@@ -739,12 +739,12 @@ function buildHtml({ symbol, radar, gamma }) {
 
         <div class="level-box">
           <div class="level-line">
-            <span>Call Wall الحقيقي</span>
+            <span>Call Wall</span>
             <b>${gamma.realCallWall}</b>
           </div>
 
           <div class="level-line">
-            <span>Gamma Flip</span>
+            <span>نقطة التوازن التاريخية</span>
             <b>${gamma.gammaFlip}</b>
           </div>
 
@@ -779,7 +779,7 @@ function buildHtml({ symbol, radar, gamma }) {
 
         <div class="level-box">
           <div class="level-line">
-            <span>Put Wall الحقيقي</span>
+            <span>Put Wall</span>
             <b>${gamma.realPutWall}</b>
           </div>
 
@@ -806,9 +806,9 @@ function buildHtml({ symbol, radar, gamma }) {
       الرادار يظهر أن تدفق العقود: <b>${radar.flowBias}</b>،
       والطرف المسيطر: <b>${radar.controller}</b>.
       المتابعة تكون عند: <b>${gamma.entry}</b>،
-      مع مراقبة Call Wall الحقيقي <b>${gamma.realCallWall}</b>
-      و Put Wall الحقيقي <b>${gamma.realPutWall}</b>
-      و Gamma Flip <b>${gamma.gammaFlip}</b>.
+      مع مراقبة Call Wall <b>${gamma.realCallWall}</b>
+      و Put Wall <b>${gamma.realPutWall}</b>
+      و نقطة التوازن التاريخية <b>${gamma.gammaFlip}</b>.
     </div>
   </div>
 
