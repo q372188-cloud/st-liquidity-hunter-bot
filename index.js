@@ -176,13 +176,13 @@ function parseGamma(text) {
     stop: extract(/الوقف الفني:\s*\n([^\n]+)/, text),
 
     gammaRegime: extract(/Gamma Regime:\s*\n([^\n]+)/, text),
-    gammaFlip: extract(/Gamma Flip(?: الحقيقي)?:\s*\n([^\n]+)/, text),
+    gammaFlip: extract(/Gamma Flip:\s*\n([^\n]+)/, text),
 
-    realCallWall: extract(/Call Wall الحقيقي:\s*\n([0-9.]+)/, text),
-    realCallWallPower: extract(/Call Wall الحقيقي:\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
+    realCallWall: extract(/Call Wall :\s*\n([0-9.]+)/, text),
+    realCallWallPower: extract(/Call Wall :\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
 
-    realPutWall: extract(/Put Wall الحقيقي:\s*\n([0-9.]+)/, text),
-    realPutWallPower: extract(/Put Wall الحقيقي:\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
+    realPutWall: extract(/Put Wall :\s*\n([0-9.]+)/, text),
+    realPutWallPower: extract(/Put Wall :\s*\n[0-9.]+\s*\|\s*([+\-]?[0-9.,KMB]+)/, text),
 
     dex: extract(/DEX:\s*\n([^\n]+)/, text),
     callFlow: extract(/Call Flow:\s*([+\-]?[0-9.]+%)/, text),
@@ -208,7 +208,7 @@ function getDecisionColor(decision) {
 
 function gammaMapRows(gamma) {
   const rows = [
-    { price: gamma.realCallWall, side: 'call', label: 'جدار الكول الحقيقي', power: 100 },
+    { price: gamma.realCallWall, side: 'call', label: 'جدار الكول ', power: 100 },
     { price: gamma.r3, side: 'call', label: 'R3 قريب', power: 75 },
     { price: gamma.r2, side: 'call', label: 'R2 قريب', power: 60 },
     { price: gamma.r1, side: 'call', label: 'R1 قريب', power: 45 },
@@ -216,7 +216,7 @@ function gammaMapRows(gamma) {
     { price: gamma.s1, side: 'put', label: 'S1 قريب', power: 45 },
     { price: gamma.s2, side: 'put', label: 'S2 قريب', power: 60 },
     { price: gamma.s3, side: 'put', label: 'S3 قريب', power: 75 },
-    { price: gamma.realPutWall, side: 'put', label: 'جدار البوت الحقيقي', power: 100 }
+    { price: gamma.realPutWall, side: 'put', label: 'جدار البوت ', power: 100 }
   ].filter(x => x.price && x.price !== 'N/A');
 
   return rows.map(x => `
