@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const TelegramBot = require('node-telegram-bot-api');
 const puppeteer = require('puppeteer');
+const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
@@ -13,6 +14,10 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
     params: { timeout: 10 }
   }
 });
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const IMAGE_API_SECRET = process.env.IMAGE_API_SECRET || 'ST_IMAGE_2026_PRIVATE_KEY';
 
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 
@@ -27,7 +32,7 @@ const hubSupabase = createClient(
 );
 
 const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 30 * 1000);
-const PAIR_WINDOW_MINUTES = Number(process.env.PAIR_WINDOW_MINUTES || 20);
+const PAIR_WINDOW_MINUTES = Number(process.env.PAIR_WINDOW_MINUTES || 10);
 
 const processingSymbols = new Set();
 
@@ -233,7 +238,6 @@ function gammaMapRows(gamma) {
     </div>
   `).join('');
 }
-
 function buildHtml({ symbol, radar, gamma }) {
   const decisionColor = getDecisionColor(gamma.direction);
   const gexRows = gammaMapRows(gamma);
@@ -321,7 +325,8 @@ function buildHtml({ symbol, radar, gamma }) {
     padding: 18px;
     min-height: 110px;
   }
-        .label {
+
+  .label {
     color: #9fb6c9;
     font-size: 21px;
     margin-bottom: 8px;
@@ -572,8 +577,7 @@ function buildHtml({ symbol, radar, gamma }) {
       <div class="decision">${gamma.direction}</div>
     </div>
   </div>
-
-  <div class="grid2">
+    <div class="grid2">
     <div class="card">
       <div class="section-title red">الإشارات السلبية</div>
 
@@ -719,7 +723,8 @@ function buildHtml({ symbol, radar, gamma }) {
       </div>
     </div>
   </div>
-    <div class="grid2">
+
+  <div class="grid2">
     <div class="card">
       <div class="section-title green">مقاومات القاما القريبة</div>
 
@@ -847,8 +852,8 @@ async function getLatestPair(symbol) {
 
   if (error) throw error;
 
-  const radar = (data || []).find(x => x.source === 'radar');
-  const gamma = (data || []).find(x => x.source === 'gamma' || x.source === 'gamma_auto');
+  const radar = (data || []).find(x => x.source === 'radar' || x.source === 'radar_api');
+  const gamma = (data || []).find(x => x.source === 'gamma' || x.source === 'gamma_auto' || x.source === 'gamma_api');
 
   if (!radar || !gamma) return null;
 
@@ -861,7 +866,6 @@ async function markProcessed(ids) {
     .update({ processed: true })
     .in('id', ids);
 }
-
 async function generateImage(symbol, radarText, gammaText) {
   const radar = parseRadar(radarText);
   const gamma = parseGamma(gammaText);
@@ -1127,6 +1131,69 @@ async function scanSnapshots() {
     console.error('SCAN ERROR:', err.message);
   }
 }
+
+app.get('/api/image', async (req, res) => {
+  try {
+    const key = String(req.query.key || '');
+    const symbol = normalizeSymbol(req.query.symbol);
+
+    if (!IMAGE_API_SECRET || key !== IMAGE_API_SECRET) {
+      return res.status(401).json({
+        ok: false,
+        error: 'UNAUTHORIZED'
+      });
+    }
+
+    if (!symbol) {
+      return res.status(400).json({
+        ok: false,
+        error: 'INVALID_SYMBOL'
+      });
+    }
+
+    const pair = await getLatestPair(symbol);
+
+    if (!pair) {
+      return res.status(404).json({
+        ok: false,
+        error: 'PAIR_NOT_READY'
+      });
+    }
+
+    const imagePath = await generateImage(
+      symbol,
+      pair.radar.message_text,
+      pair.gamma.message_text
+    );
+
+    return res.sendFile(imagePath, err => {
+      try {
+        if (fs.existsSync(imagePath)) {
+          fs.unlinkSync(imagePath);
+        }
+      } catch (_) {}
+
+      if (err) {
+        console.error('SEND IMAGE FILE ERROR:', err.message);
+      }
+    });
+  } catch (err) {
+    console.error('IMAGE API ERROR:', err.message);
+
+    return res.status(500).json({
+      ok: false,
+      error: 'IMAGE_GENERATION_FAILED'
+    });
+  }
+});
+
+app.get('/health', (req, res) => {
+  res.send('IMAGE BOT OK');
+});
+
+app.listen(PORT, () => {
+  console.log(`Image API running on ${PORT}`);
+});
 
 setInterval(scanSnapshots, CHECK_INTERVAL_MS);
 
