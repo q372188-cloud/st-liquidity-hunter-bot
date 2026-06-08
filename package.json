@@ -4,9 +4,10 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "latest",
-    "node-telegram-bot-api": "latest",
-    "puppeteer": "latest",
+    "axios": "latest",
     "dotenv": "latest",
-    "axios": "latest"
+    "express": "^4.21.2",
+    "node-telegram-bot-api": "latest",
+    "puppeteer": "latest"
   }
 }
