@@ -16,7 +16,7 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 });
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT || 5000);
 const IMAGE_API_SECRET = process.env.IMAGE_API_SECRET || 'ST_IMAGE_2026_PRIVATE_KEY';
 
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
