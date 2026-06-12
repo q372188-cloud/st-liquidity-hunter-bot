@@ -1187,12 +1187,42 @@ app.get('/api/image', async (req, res) => {
   }
 });
 
+app.use(express.json());
+
+app.get('/', (req, res) => {
+  res.send('Gamma Bot is running');
+});
+
+app.post('/restart', (req, res) => {
+  const password = req.body?.password;
+
+  if (password !== RESTART_PASSWORD) {
+    return res.status(403).json({
+      ok: false,
+      error: 'Forbidden'
+    });
+  }
+
+  res.status(200).json({
+    ok: true,
+    message: 'Restart command received'
+  });
+
+  setTimeout(() => {
+    console.log('Restart requested. Exiting process...');
+    process.exit(0);
+  }, 3000);
+});
+
 app.get('/health', (req, res) => {
-  res.send('IMAGE BOT OK');
+  res.json({
+    ok: true,
+    service: 'gamma'
+  });
 });
 
 app.listen(PORT, () => {
-  console.log(`Image API running on ${PORT}`);
+  console.log(`Gamma API running on port ${PORT}`);
 });
 
 setInterval(scanSnapshots, CHECK_INTERVAL_MS);
