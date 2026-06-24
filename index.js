@@ -883,10 +883,13 @@ async function generateImage(symbol, radarText, gammaText) {
   const browser = await puppeteer.launch({
     headless: 'new',
     args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage'
-    ]
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+  '--no-zygote',
+  '--single-process'
+]
   });
 
   const page = await browser.newPage();
